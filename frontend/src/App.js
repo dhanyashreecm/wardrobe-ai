@@ -1,16 +1,23 @@
+import SimilarSearch from "./pages/SimilarSearch";
+import OutfitRecommendation from "./pages/OutfitRecommendation";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import Register from "./pages/Register";
 import Login from "./pages/Login";
-import Dashboard from "./pages/Dashboard";
+import Register from "./pages/Register";
+import Wardrobe from "./pages/Wardrobe";
 
 function App() {
   return (
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<Navigate to="/login" />} />
-        <Route path="/register" element={<Register />} />
         <Route path="/login" element={<Login />} />
-        <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/register" element={<Register />} />
+	<Route path="/similar" element={<SimilarSearch />} />	
+        <Route
+  path="/recommend"
+  element={<OutfitRecommendation />}
+/>
+        <Route path="/wardrobe" element={<Wardrobe />} />
       </Routes>
     </BrowserRouter>
   );

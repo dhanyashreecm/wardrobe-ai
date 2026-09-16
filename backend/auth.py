@@ -1,6 +1,6 @@
 import bcrypt
 from datetime import datetime
-from db import users_collection
+from backend.db import users_collection
 
 def register_user(name, email, password):
     existing = users_collection.find_one({"email": email})

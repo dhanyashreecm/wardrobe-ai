@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import axios from "axios";
 import { useNavigate } from "react-router-dom";
+import "../App.css";
 
 function Dashboard() {
   const [message, setMessage] = useState("");
@@ -24,10 +25,13 @@ function Dashboard() {
   };
 
   return (
-    <div>
-      <h2>Dashboard</h2>
-      <p>{message}</p>
-      <button onClick={handleLogout}>Logout</button>
+    <div className="page-container">
+      <div className="auth-card">
+        <div className="logo">WardrobeAI</div>
+        <h2>Dashboard</h2>
+        <p style={{marginBottom: "20px", color: "#555"}}>{message}</p>
+        <button onClick={handleLogout}>Logout</button>
+      </div>
     </div>
   );
 }

@@ -3,3 +3,31 @@ node_modules/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Python virtual environments
+ai_env/
+
+# Datasets and generated AI data
+dataset/
+
+# User uploaded images
+backend/uploads/
+uploads/
+
+# React build
+frontend/build/
+
+# Environment files
+.env
+.env.*
+
+# Generated/temporary scripts
+frontend/src/make_*.py
+frontend/src/pages/make_*.py
+
+# Backup files
+*_backup*
+*.bak
+
+# Generated backend helper scripts
+backend/make_*.py
