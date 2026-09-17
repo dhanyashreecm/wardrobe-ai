@@ -7,6 +7,7 @@ function Register() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [gender, setGender] = useState("Female");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
@@ -23,7 +24,7 @@ function Register() {
     setLoading(true);
     try {
       const res = await axios.post("http://localhost:5001/api/register", {
-        name, email, password
+        name, email, password, gender
       });
       if (res.data.success) {
         navigate("/login");
@@ -101,6 +102,27 @@ function Register() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
+            <label className="field-label">
+              Wardrobe category set
+            </label>
+            <select
+              value={gender}
+              onChange={(e) => setGender(e.target.value)}
+            >
+              <option value="Female">Women</option>
+              <option value="Male">Men</option>
+            </select>
+            <p
+              style={{
+                fontSize: "12px",
+                color: "#8a7a6d",
+                margin: "-8px 0 12px"
+              }}
+            >
+              Just trims the category list to what's relevant to
+              you (e.g. hides Saree/Lehenga/Dress for Men) - you
+              can still add anything later.
+            </p>
             <button type="submit" disabled={loading}>
               {loading ? "Creating account..." : "Create Account →"}
             </button>

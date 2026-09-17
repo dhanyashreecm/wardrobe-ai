@@ -6,14 +6,46 @@ from collections import defaultdict
 # OUTFIT RECOMMENDATION
 # ============================================================
 
-# Occasion words users may have stored on an item that should
-# still count as a match for one of the dropdown's occasions.
+# The full set of occasions the dropdown offers, and the words a
+# stored item might use that should still count as a match for one
+# of them. Occasion filtering is STRICT (see _filter_by_occasion
+# below): asking for "party" only ever returns items tagged party
+# (or one of its aliases) - never casual items mixed in "just in
+# case".
 OCCASION_ALIASES = {
-    "casual": {"casual", "daily", "daily wear", "college"},
-    "formal": {"formal", "office", "work"},
-    "party": {"party", "special occasion"},
+    "casual": {"casual", "daily", "daily wear", "college", "home"},
+    "outing": {"outing", "day out", "hangout", "brunch", "errands"},
+    "formal": {"formal", "office", "work", "business"},
+    "party": {"party", "night out", "clubbing", "special occasion"},
+    "festive": {"festive", "festival", "celebration", "holiday"},
     "traditional": {"traditional", "ethnic", "traditional/ethnic"}
 }
+
+CANONICAL_OCCASIONS = list(OCCASION_ALIASES.keys())
+
+
+def _occasion_matches(item_occasion, requested_occasion):
+    """
+    True when an item's stored occasion is the requested one, or
+    one of its known aliases. An item with no occasion recorded is
+    treated as "casual" (the same default used when an item is
+    first added), never as a wildcard that matches everything.
+    """
+
+    item_occasion = (item_occasion or "casual").lower().strip()
+    requested_occasion = (requested_occasion or "casual").lower().strip()
+
+    if item_occasion == requested_occasion:
+        return True
+
+    return item_occasion in OCCASION_ALIASES.get(requested_occasion, set())
+
+
+def _filter_by_occasion(wardrobe_items, occasion):
+    return [
+        item for item in wardrobe_items
+        if _occasion_matches(item.get("occasion"), occasion)
+    ]
 
 
 # ============================================================
@@ -104,33 +136,6 @@ WARM_LAYER_MARKERS = {
 }
 
 
-def _occasion_score(item_occasion, requested_occasion):
-    """
-    Higher score when an item's stored occasion matches what the
-    user asked for (directly or via a known alias). Items with no
-    match still get a baseline score rather than being hidden -
-    occasion should influence ranking, not silently hide clothes.
-    """
-
-    if not item_occasion:
-        return 10
-
-    item_occasion = item_occasion.lower().strip()
-    requested_occasion = (
-        requested_occasion or "casual"
-    ).lower().strip()
-
-    if item_occasion == requested_occasion:
-        return 30
-
-    if item_occasion in OCCASION_ALIASES.get(
-        requested_occasion, set()
-    ):
-        return 30
-
-    return 10
-
-
 def _weather_score(items, weather):
     """
     Rough weather-suitability score. Returns a neutral 5 points
@@ -164,21 +169,16 @@ def _weather_score(items, weather):
     return points / len(items)
 
 
-def _score_outfit(items, occasion, weather=None):
+def _score_outfit(items, weather=None):
     """
-    Rough compatibility score for one outfit: how well its items'
-    occasions match the request, a small bonus for pieces that
-    don't all share the exact same color word, and (when weather
-    data is available) how weather-appropriate the pieces are.
+    Rough compatibility score for one outfit: a small bonus for
+    pieces that don't all share the exact same color word, and
+    (when weather data is available) how weather-appropriate the
+    pieces are. Occasion is no longer part of the score - by the
+    time an outfit reaches this function every item in it has
+    already been filtered down to the requested occasion (see
+    _filter_by_occasion), so there's nothing left for it to rank.
     """
-
-    occasion_points = sum(
-        _occasion_score(
-            item.get("occasion"),
-            occasion
-        )
-        for item in items
-    ) / len(items)
 
     colors = {
         (item.get("color") or "")
@@ -200,8 +200,7 @@ def _score_outfit(items, occasion, weather=None):
     )
 
     return (
-        occasion_points
-        + color_points
+        color_points
         + weather_points
     )
 
@@ -215,7 +214,17 @@ def recommend_outfits(wardrobe_items, occasion="casual", weather=None):
     additional AI training required. `weather`, when provided, is
     the dict returned by backend.weather.get_weather() and nudges
     ranking toward weather-appropriate pieces.
+
+    Occasion filtering is strict: asking for "party" only builds
+    outfits out of items tagged party (or a known alias of it) -
+    a casual top never sneaks into a party recommendation just
+    because the wardrobe happens to be short on party tops.
     """
+
+    if not wardrobe_items:
+        return []
+
+    wardrobe_items = _filter_by_occasion(wardrobe_items, occasion)
 
     if not wardrobe_items:
         return []
@@ -289,7 +298,6 @@ def recommend_outfits(wardrobe_items, occasion="casual", weather=None):
             "score": round(
                 _score_outfit(
                     items,
-                    occasion,
                     weather
                 ),
                 1
@@ -323,7 +331,6 @@ def recommend_outfits(wardrobe_items, occasion="casual", weather=None):
                 "score": round(
                     _score_outfit(
                         items,
-                        occasion,
                         weather
                     ),
                     1

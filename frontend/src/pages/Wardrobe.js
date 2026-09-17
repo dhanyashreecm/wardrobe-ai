@@ -11,11 +11,19 @@ function Wardrobe() {
   const [category, setCategory] = useState("Shirt");
   const [color, setColor] = useState("");
   const [material, setMaterial] = useState("");
+  const [occasion, setOccasion] = useState("casual");
   const [image, setImage] = useState(null);
 
   const [loading, setLoading] = useState(false);
 
   const [filterCategory, setFilterCategory] = useState("All");
+
+  // Set at registration/login (see Register.js / Login.js) and used
+  // purely to trim the category dropdown to the categories relevant
+  // to the signed-in user - "Male" hides Skirt/Dress/Saree/Lehenga.
+  // Nothing is enforced server-side; an account with no gender on
+  // file (older accounts) just sees every category.
+  const userGender = (localStorage.getItem("gender") || "").toLowerCase();
 
   // =========================================================
   // EDIT ITEM STATE
@@ -25,6 +33,7 @@ function Wardrobe() {
   const [editCategory, setEditCategory] = useState("");
   const [editColor, setEditColor] = useState("");
   const [editMaterial, setEditMaterial] = useState("");
+  const [editOccasion, setEditOccasion] = useState("casual");
   const [editSaving, setEditSaving] = useState(false);
 
   // =========================================================
@@ -277,6 +286,8 @@ function Wardrobe() {
       formData.append("material", material);
     }
 
+    formData.append("occasion", occasion);
+
     formData.append("image", image);
 
     try {
@@ -301,6 +312,8 @@ function Wardrobe() {
       setColor("");
 
       setMaterial("");
+
+      setOccasion("casual");
 
       setImage(null);
 
@@ -383,6 +396,7 @@ function Wardrobe() {
     setEditCategory(item.category || "");
     setEditColor(item.color || "");
     setEditMaterial(item.material || "");
+    setEditOccasion(item.occasion || "casual");
   };
 
   const handleEditCancel = () => {
@@ -390,6 +404,7 @@ function Wardrobe() {
     setEditCategory("");
     setEditColor("");
     setEditMaterial("");
+    setEditOccasion("casual");
   };
 
   const handleEditSave = async (id) => {
@@ -401,7 +416,8 @@ function Wardrobe() {
         {
           category: editCategory,
           color: editColor,
-          material: editMaterial
+          material: editMaterial,
+          occasion: editOccasion
         },
         {
           headers: {
@@ -487,27 +503,59 @@ function Wardrobe() {
   // near-duplicate options that just makes setting up a wardrobe
   // feel tedious. Ethnic wear is limited to the two categories the
   // AI can actually tell apart with confidence: Saree and Lehenga.
-  const categories = [
-    ["Shirt", "Shirt"],
-    ["T-Shirt", "T-Shirt"],
-    ["Pant", "Pant"],
-    ["Shorts", "Shorts"],
-    ["Skirt", "Skirt"],
-    ["Jacket", "Jacket"],
-    ["Dress", "Dress"],
-    ["Saree", "Saree"],
-    ["Lehenga", "Lehenga"],
-    ["Bag", "Bag"],
-    ["Watch", "Watch"],
-    ["Belt", "Belt"],
-    ["Jewelry", "Jewelry"]
+  //
+  // Skirt/Dress/Saree/Lehenga are marked women-only below and get
+  // filtered out of the dropdown for an account registered as
+  // Male - everything else (Western basics + accessories) is
+  // shared. This is just a UI filter based on what the user picked
+  // at signup, not a retrained model - there's no separate AI per
+  // gender.
+  const ALL_CATEGORIES = [
+    ["Shirt", "Shirt", "unisex"],
+    ["T-Shirt", "T-Shirt", "unisex"],
+    ["Pant", "Pant", "unisex"],
+    ["Shorts", "Shorts", "unisex"],
+    ["Skirt", "Skirt", "women"],
+    ["Jacket", "Jacket", "unisex"],
+    ["Dress", "Dress", "women"],
+    ["Saree", "Saree", "women"],
+    ["Lehenga", "Lehenga", "women"],
+    ["Bag", "Bag", "unisex"],
+    ["Watch", "Watch", "unisex"],
+    ["Belt", "Belt", "unisex"],
+    ["Jewelry", "Jewelry", "unisex"]
   ];
+
+  const categories = ALL_CATEGORIES
+    .filter(
+      ([, , audience]) =>
+        audience === "unisex" || userGender !== "male"
+    )
+    .map(([value, label]) => [value, label]);
 
   const ACCESSORY_CATEGORIES = [
     "Bag",
     "Watch",
     "Belt",
     "Jewelry"
+  ];
+
+  // =========================================================
+  // OCCASION OPTIONS
+  //
+  // Matches backend.outfit_recommendation.CANONICAL_OCCASIONS -
+  // recommendations filter STRICTLY by this value now, so picking
+  // one here is what makes an item show up (or not) for a given
+  // occasion later.
+  // =========================================================
+
+  const OCCASIONS = [
+    ["casual", "Casual"],
+    ["outing", "Outing"],
+    ["formal", "Formal"],
+    ["party", "Party"],
+    ["festive", "Festive"],
+    ["traditional", "Traditional"]
   ];
 
   // =========================================================
@@ -555,6 +603,30 @@ function Wardrobe() {
             >
 
               {categories.map(
+                ([value, label]) => (
+                  <option
+                    key={value}
+                    value={value}
+                  >
+                    {label}
+                  </option>
+                )
+              )}
+
+            </select>
+
+            {/* OCCASION */}
+
+            <label className="field-label">Occasion</label>
+
+            <select
+              value={occasion}
+              onChange={(e) =>
+                setOccasion(e.target.value)
+              }
+            >
+
+              {OCCASIONS.map(
                 ([value, label]) => (
                   <option
                     key={value}
@@ -919,6 +991,26 @@ function Wardrobe() {
                         )}
                       </select>
 
+                      <select
+                        value={editOccasion}
+                        onChange={(e) =>
+                          setEditOccasion(
+                            e.target.value
+                          )
+                        }
+                      >
+                        {OCCASIONS.map(
+                          ([value, label]) => (
+                            <option
+                              key={value}
+                              value={value}
+                            >
+                              {label}
+                            </option>
+                          )
+                        )}
+                      </select>
+
                       <input
                         placeholder="Color"
                         value={editColor}
@@ -995,6 +1087,14 @@ function Wardrobe() {
                           {item.material}
                         </p>
                       )}
+
+                      {/* OCCASION */}
+
+                      <p className="item-meta">
+                        {OCCASIONS.find(
+                          ([value]) => value === item.occasion
+                        )?.[1] || "Casual"}
+                      </p>
 
                       <div className="item-actions">
 

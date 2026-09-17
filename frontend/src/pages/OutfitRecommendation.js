@@ -3,6 +3,19 @@ import axios from "axios";
 import Layout from "../components/Layout";
 import "../App.css";
 
+// Matches backend.outfit_recommendation.CANONICAL_OCCASIONS.
+// Recommendations are filtered STRICTLY by this value - asking for
+// "Party" only ever returns items tagged Party (or a known alias),
+// never casual items mixed in.
+const OCCASIONS = [
+  ["casual", "Casual"],
+  ["outing", "Outing"],
+  ["formal", "Formal"],
+  ["party", "Party"],
+  ["festive", "Festive"],
+  ["traditional", "Traditional"]
+];
+
 function OutfitRecommendation() {
   const [occasion, setOccasion] = useState("casual");
   const [city, setCity] = useState("");
@@ -12,6 +25,7 @@ function OutfitRecommendation() {
   const [recommendations, setRecommendations] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [searched, setSearched] = useState(false);
 
   const getRecommendations = async () => {
     setLoading(true);
@@ -19,6 +33,7 @@ function OutfitRecommendation() {
     setWeather(null);
     setWeatherError("");
     setRecommendations([]);
+    setSearched(true);
 
     const token = localStorage.getItem("token");
 
@@ -97,10 +112,11 @@ function OutfitRecommendation() {
               setOccasion(e.target.value)
             }
           >
-            <option value="casual">Casual</option>
-            <option value="formal">Formal</option>
-            <option value="party">Party</option>
-            <option value="traditional">Traditional</option>
+            {OCCASIONS.map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
           </select>
 
           {/* WEATHER */}
@@ -253,12 +269,19 @@ function OutfitRecommendation() {
 
           {!loading &&
             !error &&
-            recommendations.length === 0 && (
+            recommendations.length === 0 &&
+            (searched ? (
+              <p style={{ color: "#8a7a6d" }}>
+                No outfits tagged "{occasion}" yet. Add a few
+                wardrobe items with this occasion (or edit
+                existing ones) and try again.
+              </p>
+            ) : (
               <p style={{ color: "#8a7a6d" }}>
                 Choose your preferences and click "Recommend
                 Outfits".
               </p>
-            )}
+            ))}
         </div>
       </div>
     </Layout>

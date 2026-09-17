@@ -3,6 +3,16 @@ import axios from "axios";
 import Layout from "../components/Layout";
 import "../App.css";
 
+// Matches backend.outfit_recommendation.CANONICAL_OCCASIONS.
+const OCCASIONS = [
+  ["casual", "Casual"],
+  ["outing", "Outing"],
+  ["formal", "Formal"],
+  ["party", "Party"],
+  ["festive", "Festive"],
+  ["traditional", "Traditional"]
+];
+
 function TripPlanner() {
   const [destination, setDestination] = useState("");
   const [startDate, setStartDate] = useState("");
@@ -117,10 +127,11 @@ function TripPlanner() {
               value={occasion}
               onChange={(e) => setOccasion(e.target.value)}
             >
-              <option value="casual">Casual</option>
-              <option value="formal">Formal</option>
-              <option value="party">Party</option>
-              <option value="traditional">Traditional</option>
+              {OCCASIONS.map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
             </select>
 
             <button

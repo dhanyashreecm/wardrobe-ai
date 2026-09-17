@@ -124,6 +124,7 @@ def register():
     name = data.get("name")
     email = data.get("email")
     password = data.get("password")
+    gender = data.get("gender")
 
     if not name or not email or not password:
 
@@ -135,7 +136,8 @@ def register():
     result = register_user(
         name,
         email,
-        password
+        password,
+        gender
     )
 
     status_code = (

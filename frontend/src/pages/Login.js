@@ -21,6 +21,13 @@ function Login() {
       });
       if (res.data.success) {
         localStorage.setItem("token", res.data.token);
+
+        if (res.data.gender) {
+          localStorage.setItem("gender", res.data.gender);
+        } else {
+          localStorage.removeItem("gender");
+        }
+
         navigate("/dashboard");
       }
     } catch (err) {

@@ -2,7 +2,7 @@ import bcrypt
 from datetime import datetime
 from backend.db import users_collection
 
-def register_user(name, email, password):
+def register_user(name, email, password, gender=None):
     existing = users_collection.find_one({"email": email})
     if existing:
         return {"success": False, "message": "Email already registered"}
@@ -15,6 +15,14 @@ def register_user(name, email, password):
         "password_hash": hashed,
         "created_at": datetime.utcnow()
     }
+
+    # Gender is optional - it only drives which wardrobe categories
+    # (Skirt/Dress/Saree/Lehenga vs the shared Western basics) show
+    # up in the "Add Item" dropdown, nothing else. An account with
+    # no gender set just sees the full, unfiltered category list.
+    if gender:
+        user["gender"] = gender
+
     users_collection.insert_one(user)
     return {"success": True, "message": "Registration successful"}
 
@@ -24,6 +32,11 @@ def verify_login(email, password):
         return {"success": False, "message": "No account with this email"}
 
     if bcrypt.checkpw(password.encode("utf-8"), user["password_hash"]):
-        return {"success": True, "name": user["name"], "email": user["email"]}
+        return {
+            "success": True,
+            "name": user["name"],
+            "email": user["email"],
+            "gender": user.get("gender")
+        }
     else:
         return {"success": False, "message": "Incorrect password"}
