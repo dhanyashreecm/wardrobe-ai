@@ -28,7 +28,8 @@ def plan_trip(
     start_date,
     end_date,
     occasion="casual",
-    weather=None
+    weather=None,
+    account_gender=None
 ):
     """
     Build a day-by-day outfit plan for a trip, plus a packing
@@ -74,7 +75,8 @@ def plan_trip(
     outfit_pool = recommend_outfits(
         wardrobe_items,
         occasion=occasion,
-        weather=weather
+        weather=weather,
+        account_gender=account_gender
     )
 
     if not outfit_pool:

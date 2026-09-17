@@ -31,3 +31,6 @@ frontend/src/pages/make_*.py
 
 # Generated backend helper scripts
 backend/make_*.py
+Claude outputs/
+_snap2.tar.gz
+*.tar.gz

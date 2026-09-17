@@ -1,4 +1,4 @@
-from backend.outfit_recommendation import recommend_outfits
+from backend.outfit_recommendation import recommend_outfits, effective_occasions, describe_missing_pieces
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from flask_jwt_extended import (
@@ -7,8 +7,9 @@ from flask_jwt_extended import (
     jwt_required,
     get_jwt_identity
 )
-from backend.auth import register_user, verify_login
+from backend.auth import register_user, verify_login, get_user_gender, migrate_user_gender
 from backend.wardrobe import add_item, get_user_wardrobe, delete_item, update_item
+from backend.category_gender import is_allowed_for_account
 from backend.clothing_similarity import find_similar
 from backend.indofashion_similarity import find_similar_indofashion
 from backend.indofashion_classifier import predict_category
@@ -53,22 +54,44 @@ ACCESSORY_CATEGORIES = {
 # =========================================================
 # ETHNIC AUTO-DETECTION
 #
-# The IndoFashion classifier was trained only on Indian ethnic
-# wear, so it can't be trusted to tell a shirt from a t-shirt from
-# a dress - it will just force-fit those into whatever ethnic
-# class looks closest. Wardrobe-AI's category list has been
-# deliberately compressed down to a small, practical set (see
-# Wardrobe.js), and auto-detection is scoped down to match: it
-# only ever overrides the user's manual pick when the model is
-# confident the photo is a saree or a lehenga. Everything else
-# (Shirt, T-Shirt, Pant, Shorts, Skirt, Jacket, Dress, and any
-# accessory) is always taken from the manual category the user
-# selected.
+# The IndoFashion classifier was trained on the 16 classes listed in
+# dataset/indofashion/class_names.json - it can't be trusted on
+# anything outside that list (a Western shirt, jacket, etc get
+# force-fit into whatever ethnic class looks closest), so the raw
+# prediction is only ever trusted when it lands on one of those 16
+# trained classes, mapped here to the matching manual-dropdown
+# label (see Wardrobe.js's ALL_CATEGORIES, which now exposes all of
+# these as pickable categories too - not just Saree/Lehenga as
+# before).
+#
+# Gender-gated in both directions (see account_gender check below):
+# the AI is never allowed to silently promote an item into a
+# category that's gendered opposite to the account's - a Male
+# account's item never becomes a Saree/Lehenga/Blouse/etc, and a
+# Female account's item never becomes a Sherwani/Dhoti Pants/etc,
+# even on a confident prediction.
 # =========================================================
 
 ETHNIC_AUTO_CATEGORIES = {
+    "blouse": "Blouse",
+    "dhoti_pants": "Dhoti Pants",
+    "dupattas": "Dupatta",
+    "gowns": "Gown",
+    "kurta_men": "Kurta (Men)",
+    "leggings_and_salwars": "Leggings & Salwars",
+    "lehenga": "Lehenga",
+    "mojaris_men": "Mojaris (Men)",
+    "mojaris_women": "Mojaris (Women)",
+    "nehru_jackets": "Nehru Jacket",
+    "palazzos": "Palazzos",
+    "petticoats": "Petticoat",
     "saree": "Saree",
-    "lehenga": "Lehenga"
+    "sherwanis": "Sherwani",
+    "women_kurta": "Kurta (Women)"
+    # "shirt" (the 16th class) is deliberately NOT in this map - a
+    # confident "shirt" prediction never needs to override anything,
+    # since Shirt is already the most common manual pick and is
+    # unisex either way.
 }
 
 ETHNIC_DETECTION_CONFIDENCE_THRESHOLD = 0.5
@@ -124,6 +147,9 @@ def register():
     name = data.get("name")
     email = data.get("email")
     password = data.get("password")
+    # Gender is MANDATORY now - never trust a value from the client
+    # beyond reading it here; register_user() is the actual gate
+    # that rejects anything that isn't exactly "Male" or "Female".
     gender = data.get("gender")
 
     if not name or not email or not password:
@@ -182,6 +208,36 @@ def login():
 
 
 # =========================================================
+# ONE-TIME GENDER MIGRATION
+#
+# For accounts created before gender was mandatory. Requires a
+# valid JWT (so this can only be called by the account itself, never
+# by guessing an email) and only ever succeeds ONCE - see
+# migrate_user_gender() in auth.py, which refuses outright if the
+# account already has a gender on file. This is the ONLY route in
+# the app that can ever write to a user's "gender" field after
+# registration, and it can only move an account from "unset" to
+# "set" - never change an existing value.
+# =========================================================
+
+@app.route("/api/user/gender/migrate", methods=["POST"])
+@jwt_required()
+def migrate_gender():
+
+    user_email = get_jwt_identity()
+
+    data = request.json or {}
+
+    gender = data.get("gender")
+
+    result = migrate_user_gender(user_email, gender)
+
+    status_code = 200 if result["success"] else 400
+
+    return jsonify(result), status_code
+
+
+# =========================================================
 # DASHBOARD
 # =========================================================
 
@@ -206,14 +262,23 @@ def add_wardrobe_item():
 
     user_email = get_jwt_identity()
 
+    # Used below to keep the AI's saree/lehenga auto-detection from
+    # overriding a Male account's category - see get_user_gender().
+    account_gender = get_user_gender(user_email)
+
     manual_category = request.form.get("category")
 
     manual_color = request.form.get("color")
 
+    # Occasion is now an OPTIONAL manual override, not something the
+    # user has to pick when uploading - the whole point of this app
+    # is that the detected category (below) already implies which
+    # occasions the item fits, automatically. See
+    # backend.outfit_recommendation.effective_occasions().
     occasion = request.form.get(
         "occasion",
-        "casual"
-    )
+        ""
+    ).strip()
 
     image = request.files.get("image")
 
@@ -277,6 +342,14 @@ def add_wardrobe_item():
     # prediction (the model guessing a Western shirt is some kind
     # of kurta, for instance) is discarded and the user's manual
     # category is used instead.
+    #
+    # Also gated on account_gender via is_allowed_for_account(),
+    # which blocks in BOTH directions: a confident prediction is
+    # discarded whenever the predicted category is gendered opposite
+    # to the account's (Male account -> Saree/Lehenga/Blouse/etc
+    # blocked; Female account -> Sherwani/Dhoti Pants/etc blocked).
+    # A unisex prediction (e.g. "shirt", not in ETHNIC_AUTO_CATEGORIES
+    # anyway) or an account with no gender set is never blocked.
     # -----------------------------------------------------
 
     detected_category = None
@@ -297,12 +370,15 @@ def add_wardrobe_item():
                 f"(confidence: {raw_confidence:.2f})"
             )
 
+            candidate_label = ETHNIC_AUTO_CATEGORIES.get(raw_category)
+
             if (
-                raw_category in ETHNIC_AUTO_CATEGORIES
+                candidate_label
                 and raw_confidence >= ETHNIC_DETECTION_CONFIDENCE_THRESHOLD
+                and is_allowed_for_account(candidate_label, account_gender)
             ):
 
-                detected_category = ETHNIC_AUTO_CATEGORIES[raw_category]
+                detected_category = candidate_label
                 category_confidence = raw_confidence
 
                 print(
@@ -379,6 +455,15 @@ def add_wardrobe_item():
 
         "occasion": occasion,
 
+        # What occasion(s) this item is ACTUALLY eligible for, worked
+        # out automatically from final_category (plus the manual
+        # override above, if any) - this is what the frontend shows
+        # right after upload so the user can see what got detected
+        # without having picked anything themselves.
+        "suitable_occasions": sorted(
+            effective_occasions(final_category, occasion)
+        ),
+
         "material": material,
 
         "image": image_url
@@ -424,6 +509,14 @@ def view_wardrobe():
         user_email
     )
 
+    # Attach each item's automatically-inferred occasion eligibility
+    # so the wardrobe grid can show it without the frontend needing
+    # to duplicate any of this logic itself.
+    for item in items:
+        item["suitable_occasions"] = sorted(
+            effective_occasions(item.get("category"), item.get("occasion"))
+        )
+
     return jsonify({
         "success": True,
         "items": items
@@ -441,7 +534,19 @@ def view_wardrobe():
 @jwt_required()
 def remove_wardrobe_item(item_id):
 
-    delete_item(item_id)
+    user_email = get_jwt_identity()
+
+    # delete_item now checks ownership itself (see wardrobe.py) -
+    # previously this matched on _id alone, which meant any
+    # logged-in user could delete ANY other user's item just by
+    # guessing/enumerating an item_id.
+    deleted = delete_item(item_id, user_email)
+
+    if not deleted:
+        return jsonify({
+            "success": False,
+            "message": "Item not found or not yours"
+        }), 404
 
     return jsonify({
         "success": True
@@ -503,6 +608,8 @@ def find_similar_clothes():
     )
 
     user_email = get_jwt_identity()
+
+    account_gender = get_user_gender(user_email)
 
     image = request.files.get("image")
 
@@ -606,6 +713,37 @@ def find_similar_clothes():
                 category=predicted_category
             )
         )
+
+
+        # -------------------------------------------------
+        # GENDER FILTERING
+        #
+        # wardrobe_results never needs this - it's already only the
+        # signed-in user's own items. For the two external datasets:
+        #   - IndoFashion results DO carry a real category (see
+        #     get_indofashion_category/get_category_from_path), so
+        #     they can genuinely be gender-filtered here.
+        #   - DeepFashion results carry category=None - there is no
+        #     way to recover a category (and therefore a gender)
+        #     from DeepFashion's current feature paths at all (see
+        #     get_deepfashion_category's docstring in
+        #     clothing_similarity.py). This is a real, disclosed
+        #     limitation: DeepFashion suggestions are NOT currently
+        #     gender-filtered. is_allowed_for_account() already
+        #     treats a None/unknown category as allowed, so this
+        #     just documents why dataset_results passes through
+        #     unfiltered rather than silently guessing.
+        # -------------------------------------------------
+
+        dataset_results = [
+            item for item in dataset_results
+            if is_allowed_for_account(item.get("category"), account_gender)
+        ]
+
+        indofashion_results = [
+            item for item in indofashion_results
+            if is_allowed_for_account(item.get("category"), account_gender)
+        ]
 
 
         # -------------------------------------------------
@@ -717,6 +855,8 @@ def recommend_outfit():
 
     user_email = get_jwt_identity()
 
+    account_gender = get_user_gender(user_email)
+
     try:
 
         # Get user's wardrobe
@@ -753,11 +893,29 @@ def recommend_outfit():
                     f"Weather lookup skipped: {e}"
                 )
 
-        # Generate recommendations
+        # Generate recommendations. account_gender is a
+        # defense-in-depth filter (see
+        # outfit_recommendation._filter_by_gender) on top of the
+        # gender guards already applied at upload time - it's what
+        # guarantees a Male account can never receive a Saree/
+        # Lehenga/etc suggestion and vice versa, even for
+        # legacy/migrated wardrobe items.
         recommendations = recommend_outfits(
             wardrobe_items,
             occasion=occasion,
-            weather=weather
+            weather=weather,
+            account_gender=account_gender
+        )
+
+        # Honest "missing item" messaging (spec section 10) - tells
+        # the user plainly when their wardrobe lacks a piece needed
+        # to complete an outfit for this occasion, instead of just
+        # silently returning fewer/zero recommendations. Never
+        # fabricates wardrobe contents - see describe_missing_pieces.
+        missing_notes = describe_missing_pieces(
+            wardrobe_items,
+            occasion=occasion,
+            account_gender=account_gender
         )
 
         return jsonify({
@@ -766,6 +924,8 @@ def recommend_outfit():
 
             "recommendations":
                 recommendations,
+
+            "notes": missing_notes,
 
             "weather": weather,
 
@@ -831,6 +991,8 @@ def create_trip():
 
     user_email = get_jwt_identity()
 
+    account_gender = get_user_gender(user_email)
+
     data = request.json or {}
 
     destination = data.get("destination", "").strip()
@@ -874,7 +1036,8 @@ def create_trip():
             start_date,
             end_date,
             occasion=occasion,
-            weather=weather
+            weather=weather,
+            account_gender=account_gender
         )
 
     except ValueError as e:

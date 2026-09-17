@@ -6,18 +6,29 @@ import "../App.css";
 // Matches backend.outfit_recommendation.CANONICAL_OCCASIONS.
 const OCCASIONS = [
   ["casual", "Casual"],
-  ["outing", "Outing"],
-  ["formal", "Formal"],
+  ["day_outing", "Day Outing"],
+  ["college", "College"],
+  ["office", "Office"],
+  ["interview", "Interview"],
+  ["date", "Date"],
   ["party", "Party"],
-  ["festive", "Festive"],
+  ["wedding", "Wedding"],
   ["traditional", "Traditional"]
 ];
+
+const GENDER_LABELS = {
+  male: "Men's Wear",
+  female: "Women's Wear"
+};
 
 function TripPlanner() {
   const [destination, setDestination] = useState("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [occasion, setOccasion] = useState("casual");
+
+  const genderKey = (localStorage.getItem("gender") || "").toLowerCase();
+  const genderLabel = GENDER_LABELS[genderKey];
 
   const [trip, setTrip] = useState(null);
   const [weather, setWeather] = useState(null);
@@ -86,6 +97,7 @@ function TripPlanner() {
           <p className="page-subtitle">
             Plan day-by-day outfits and a packing list from your
             own wardrobe.
+            {genderLabel && ` Showing ${genderLabel}.`}
           </p>
         </div>
       </div>

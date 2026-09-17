@@ -9,12 +9,23 @@ import "../App.css";
 // never casual items mixed in.
 const OCCASIONS = [
   ["casual", "Casual"],
-  ["outing", "Outing"],
-  ["formal", "Formal"],
+  ["day_outing", "Day Outing"],
+  ["college", "College"],
+  ["office", "Office"],
+  ["interview", "Interview"],
+  ["date", "Date"],
   ["party", "Party"],
-  ["festive", "Festive"],
+  ["wedding", "Wedding"],
   ["traditional", "Traditional"]
 ];
+
+// Set at registration/login (see Register.js / Login.js). Shown here
+// purely as a label so it's clear whose wardrobe these recommendations
+// were built from - it never changes which items are eligible.
+const GENDER_LABELS = {
+  male: "Men's Wear",
+  female: "Women's Wear"
+};
 
 function OutfitRecommendation() {
   const [occasion, setOccasion] = useState("casual");
@@ -23,9 +34,13 @@ function OutfitRecommendation() {
   const [weather, setWeather] = useState(null);
   const [weatherError, setWeatherError] = useState("");
   const [recommendations, setRecommendations] = useState([]);
+  const [notes, setNotes] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [searched, setSearched] = useState(false);
+
+  const genderKey = (localStorage.getItem("gender") || "").toLowerCase();
+  const genderLabel = GENDER_LABELS[genderKey];
 
   const getRecommendations = async () => {
     setLoading(true);
@@ -33,6 +48,7 @@ function OutfitRecommendation() {
     setWeather(null);
     setWeatherError("");
     setRecommendations([]);
+    setNotes([]);
     setSearched(true);
 
     const token = localStorage.getItem("token");
@@ -57,6 +73,13 @@ function OutfitRecommendation() {
         setRecommendations(
           res.data.recommendations || []
         );
+
+        // Honest "missing item" messaging (see backend
+        // describe_missing_pieces) - e.g. "Your wardrobe does not
+        // contain a suitable bottom to pair with your casual tops."
+        // Shown even when recommendations ARE returned (they may
+        // just be accessory-only or one-piece outfits).
+        setNotes(res.data.notes || []);
 
         setWeather(res.data.weather || null);
         setWeatherError(res.data.weather_error || "");
@@ -89,6 +112,7 @@ function OutfitRecommendation() {
           <p className="page-subtitle">
             Get outfit ideas using clothes already available in
             your wardrobe.
+            {genderLabel && ` Showing ${genderLabel}.`}
           </p>
         </div>
       </div>
@@ -195,6 +219,36 @@ function OutfitRecommendation() {
         </div>
 
         <div>
+          {/* MISSING-PIECE NOTES */}
+          {/* Honest disclosure, per spec section 10: never fabricate
+              wardrobe contents - if a piece is genuinely missing,
+              say so plainly instead of just showing fewer results. */}
+
+          {!loading && notes.length > 0 && (
+            <div
+              style={{
+                background: "#fdf3e7",
+                border: "1px solid #f3ddb8",
+                borderRadius: "10px",
+                padding: "12px 16px",
+                marginBottom: "18px",
+              }}
+            >
+              {notes.map((note, i) => (
+                <p
+                  key={i}
+                  style={{
+                    color: "#8a5a1f",
+                    fontSize: "13px",
+                    margin: i === 0 ? 0 : "6px 0 0",
+                  }}
+                >
+                  {note}
+                </p>
+              ))}
+            </div>
+          )}
+
           {/* RESULTS */}
 
           {!loading &&
@@ -258,6 +312,83 @@ function OutfitRecommendation() {
                         <span className="badge">
                           {outfit.occasion}
                         </span>
+
+                        {/* SUITABILITY */}
+
+                        <span
+                          className="badge"
+                          style={{
+                            marginLeft: "6px",
+                            background: outfit.flagged
+                              ? "#f3e0c9"
+                              : "#dcefe0",
+                            color: outfit.flagged
+                              ? "#8a5a1f"
+                              : "#2f6b45",
+                          }}
+                          title={
+                            outfit.flagged
+                              ? "One or more items here aren't a typical fit for this occasion - double check the item's category/occasion tags if this looks wrong."
+                              : "Every item is a typical fit for this occasion."
+                          }
+                        >
+                          {outfit.flagged
+                            ? "⚠ Unusual pairing"
+                            : "✓ Good fit"}
+                        </span>
+
+                        {typeof outfit.score === "number" && (
+                          <span
+                            style={{
+                              marginLeft: "6px",
+                              fontSize: "11px",
+                              color: "#8a7a6d",
+                            }}
+                          >
+                            score: {outfit.score}
+                          </span>
+                        )}
+
+                        {/* WHY THIS WORKS - spec section 10. Built
+                            server-side from the same color/style
+                            reasons used to score the outfit, never
+                            invented client-side. */}
+
+                        {Array.isArray(outfit.why) &&
+                          outfit.why.length > 0 && (
+                            <div
+                              style={{
+                                marginTop: "10px",
+                                paddingTop: "8px",
+                                borderTop: "1px solid #eee0d4",
+                              }}
+                            >
+                              <p
+                                style={{
+                                  fontSize: "11px",
+                                  fontWeight: 700,
+                                  color: "#6b5b4d",
+                                  margin: "0 0 4px",
+                                  textTransform: "uppercase",
+                                  letterSpacing: "0.03em",
+                                }}
+                              >
+                                Why this works
+                              </p>
+                              <ul
+                                style={{
+                                  margin: 0,
+                                  paddingLeft: "16px",
+                                  fontSize: "12px",
+                                  color: "#8a7a6d",
+                                }}
+                              >
+                                {outfit.why.map((line, i) => (
+                                  <li key={i}>{line}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
                       </div>
                     )
                   )}
@@ -271,11 +402,17 @@ function OutfitRecommendation() {
             !error &&
             recommendations.length === 0 &&
             (searched ? (
-              <p style={{ color: "#8a7a6d" }}>
-                No outfits tagged "{occasion}" yet. Add a few
-                wardrobe items with this occasion (or edit
-                existing ones) and try again.
-              </p>
+              <div>
+                <p style={{ color: "#8a7a6d", marginBottom: "4px" }}>
+                  No suitable outfits found for this occasion.
+                </p>
+                <p style={{ color: "#8a7a6d", fontSize: "13px" }}>
+                  Add a few wardrobe items tagged "
+                  {OCCASIONS.find(([value]) => value === occasion)?.[1] ||
+                    occasion}
+                  " (or edit existing ones in My Wardrobe) and try again.
+                </p>
+              </div>
             ) : (
               <p style={{ color: "#8a7a6d" }}>
                 Choose your preferences and click "Recommend

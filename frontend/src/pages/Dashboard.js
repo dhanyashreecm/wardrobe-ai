@@ -66,10 +66,23 @@ const CATEGORY_BUCKETS = [
 
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
+// Set at registration (see Register.js) and returned by every
+// login (see Login.js) - shown here so the account's wardrobe is
+// unambiguous from the moment the dashboard loads, matching the
+// same label already used on Wardrobe.js/OutfitRecommendation.js/
+// TripPlanner.js.
+const GENDER_LABELS = {
+  male: "Men's Wardrobe",
+  female: "Women's Wardrobe"
+};
+
 function Dashboard() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
+
+  const genderKey = (localStorage.getItem("gender") || "").toLowerCase();
+  const genderLabel = GENDER_LABELS[genderKey];
 
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -84,7 +97,25 @@ function Dashboard() {
         headers: { Authorization: `Bearer ${token}` },
       })
       .then((res) => setItems(res.data.items || []))
-      .catch(() => navigate("/login"))
+      .catch((err) => {
+        console.error("Dashboard wardrobe fetch failed:", err);
+        // Clearing the token here is what matters, not just the
+        // redirect: without it, Login.js's own "already logged in?"
+        // check (see Login.js) sees this same stale/invalid token
+        // still in localStorage and immediately bounces straight
+        // back to /dashboard, which fails again, which bounces
+        // back again... a fast redirect loop that trips the
+        // browser's history.replaceState rate limit within seconds
+        // (this is the "Attempt to use history.replaceState() more
+        // than 100 times per 10 seconds" crash). Whatever the actual
+        // cause was (backend not running, an expired/invalid token,
+        // a network error), the correct next step is always "log in
+        // again" - so this always logs out cleanly instead of
+        // silently retrying forever.
+        localStorage.removeItem("token");
+        localStorage.removeItem("gender");
+        navigate("/login");
+      })
       .finally(() => setLoading(false));
   }, [navigate]);
 
@@ -130,7 +161,9 @@ function Dashboard() {
     <Layout>
       <div className="page-header">
         <div>
-          <h1 className="page-title">My Digital Wardrobe</h1>
+          <h1 className="page-title">
+            {genderLabel || "My Digital Wardrobe"}
+          </h1>
           <p className="page-subtitle">
             Your clothes, your style, all in one place.
           </p>

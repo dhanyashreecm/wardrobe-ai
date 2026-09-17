@@ -11,7 +11,6 @@ function Wardrobe() {
   const [category, setCategory] = useState("Shirt");
   const [color, setColor] = useState("");
   const [material, setMaterial] = useState("");
-  const [occasion, setOccasion] = useState("casual");
   const [image, setImage] = useState(null);
 
   const [loading, setLoading] = useState(false);
@@ -33,7 +32,10 @@ function Wardrobe() {
   const [editCategory, setEditCategory] = useState("");
   const [editColor, setEditColor] = useState("");
   const [editMaterial, setEditMaterial] = useState("");
-  const [editOccasion, setEditOccasion] = useState("casual");
+  // "" = automatic (no manual override) - the default and normal
+  // case now. Only set to a real occasion value when deliberately
+  // forcing one extra occasion on top of what the category implies.
+  const [editOccasion, setEditOccasion] = useState("");
   const [editSaving, setEditSaving] = useState(false);
 
   // =========================================================
@@ -74,6 +76,15 @@ function Wardrobe() {
       setItems(res.data.items);
     } catch (err) {
       console.error("Failed to fetch wardrobe:", err);
+      // Clear the stale/invalid token before redirecting - same fix
+      // as Dashboard.js. Without this, Login.js's "already logged
+      // in?" check still sees this token and immediately bounces
+      // straight back here, which fails again, in a fast loop that
+      // trips the browser's history.replaceState rate limit (the
+      // "Attempt to use history.replaceState() more than 100 times
+      // per 10 seconds" crash).
+      localStorage.removeItem("token");
+      localStorage.removeItem("gender");
       navigate("/login");
     }
   };
@@ -286,7 +297,12 @@ function Wardrobe() {
       formData.append("material", material);
     }
 
-    formData.append("occasion", occasion);
+    // No occasion field here on purpose - the whole point of this
+    // app is that the occasion(s) an item fits get worked out
+    // automatically from its (AI-detected, or manually chosen)
+    // category. See the "suitable_occasions" the backend sends
+    // back below, and Edit on an item afterwards if you ever want
+    // to force a specific occasion on top of that.
 
     formData.append("image", image);
 
@@ -312,8 +328,6 @@ function Wardrobe() {
       setColor("");
 
       setMaterial("");
-
-      setOccasion("casual");
 
       setImage(null);
 
@@ -341,10 +355,21 @@ function Wardrobe() {
 
       fetchItems();
 
+      const detectedOccasions =
+        (response.data.suitable_occasions || [])
+          .map(
+            (value) =>
+              OCCASIONS.find(([v]) => v === value)?.[1] || value
+          )
+          .join(", ");
+
       alert(
-        `Item added successfully!\nDetected color: ${
-          response.data.color || "Unknown"
-        }`
+        `Item added successfully!\n` +
+          `Detected color: ${response.data.color || "Unknown"}\n` +
+          `Category: ${response.data.category}\n` +
+          `Automatically suitable for: ${
+            detectedOccasions || "every occasion"
+          }`
       );
     } catch (err) {
       console.error(
@@ -396,7 +421,7 @@ function Wardrobe() {
     setEditCategory(item.category || "");
     setEditColor(item.color || "");
     setEditMaterial(item.material || "");
-    setEditOccasion(item.occasion || "casual");
+    setEditOccasion(item.occasion || "");
   };
 
   const handleEditCancel = () => {
@@ -404,7 +429,7 @@ function Wardrobe() {
     setEditCategory("");
     setEditColor("");
     setEditMaterial("");
-    setEditOccasion("casual");
+    setEditOccasion("");
   };
 
   const handleEditSave = async (id) => {
@@ -497,40 +522,61 @@ function Wardrobe() {
   // CATEGORY OPTIONS
   // =========================================================
 
-  // Kept deliberately short. Each category is an umbrella for
-  // every variant of that garment (e.g. "Shirt" covers formal,
-  // casual, printed - any shirt), instead of a long list of
-  // near-duplicate options that just makes setting up a wardrobe
-  // feel tedious. Ethnic wear is limited to the two categories the
-  // AI can actually tell apart with confidence: Saree and Lehenga.
+  // Every category is an umbrella for every variant of that garment
+  // (e.g. "Shirt" covers formal, casual, printed - any shirt),
+  // instead of a long list of near-duplicate options. The ethnic
+  // categories here match the AI classifier's actual 16 trained
+  // classes 1:1 (see dataset/indofashion/class_names.json and
+  // backend.category_gender, which is the single source of truth
+  // this list mirrors) - so every one of these can also be reliably
+  // auto-detected, not just Saree/Lehenga as before.
   //
-  // Skirt/Dress/Saree/Lehenga are marked women-only below and get
-  // filtered out of the dropdown for an account registered as
-  // Male - everything else (Western basics + accessories) is
-  // shared. This is just a UI filter based on what the user picked
-  // at signup, not a retrained model - there's no separate AI per
-  // gender.
+  // "audience" drives the filter below: "unisex" always shows,
+  // "men"/"women" only shows for a matching account. This is now
+  // SYMMETRIC - a Male account gets its own explicit category set
+  // (Kurta (Men), Sherwani, Nehru Jacket, Dhoti Pants, Mojaris
+  // (Men)) instead of "whatever's left after hiding women's items".
+  // This is a UI filter based on what the user chose at signup, not
+  // a retrained model - there's no separate AI per gender. An
+  // account with no gender on file sees every category.
   const ALL_CATEGORIES = [
+    // ---- unisex Western basics ----
     ["Shirt", "Shirt", "unisex"],
     ["T-Shirt", "T-Shirt", "unisex"],
     ["Pant", "Pant", "unisex"],
     ["Shorts", "Shorts", "unisex"],
-    ["Skirt", "Skirt", "women"],
     ["Jacket", "Jacket", "unisex"],
-    ["Dress", "Dress", "women"],
-    ["Saree", "Saree", "women"],
-    ["Lehenga", "Lehenga", "women"],
     ["Bag", "Bag", "unisex"],
     ["Watch", "Watch", "unisex"],
     ["Belt", "Belt", "unisex"],
-    ["Jewelry", "Jewelry", "unisex"]
+    ["Jewelry", "Jewelry", "unisex"],
+    // ---- men's ----
+    ["Kurta (Men)", "Kurta (Men)", "men"],
+    ["Sherwani", "Sherwani", "men"],
+    ["Nehru Jacket", "Nehru Jacket", "men"],
+    ["Dhoti Pants", "Dhoti Pants", "men"],
+    ["Mojaris (Men)", "Mojaris (Men)", "men"],
+    // ---- women's ----
+    ["Kurta (Women)", "Kurta (Women)", "women"],
+    ["Skirt", "Skirt", "women"],
+    ["Dress", "Dress", "women"],
+    ["Saree", "Saree", "women"],
+    ["Lehenga", "Lehenga", "women"],
+    ["Blouse", "Blouse", "women"],
+    ["Gown", "Gown", "women"],
+    ["Petticoat", "Petticoat", "women"],
+    ["Dupatta", "Dupatta", "women"],
+    ["Palazzos", "Palazzos", "women"],
+    ["Leggings & Salwars", "Leggings & Salwars", "women"],
+    ["Mojaris (Women)", "Mojaris (Women)", "women"]
   ];
 
   const categories = ALL_CATEGORIES
-    .filter(
-      ([, , audience]) =>
-        audience === "unisex" || userGender !== "male"
-    )
+    .filter(([, , audience]) => {
+      if (audience === "unisex") return true;
+      if (!userGender) return true; // no gender on file - show everything
+      return audience === (userGender === "male" ? "men" : "women");
+    })
     .map(([value, label]) => [value, label]);
 
   const ACCESSORY_CATEGORIES = [
@@ -543,18 +589,27 @@ function Wardrobe() {
   // =========================================================
   // OCCASION OPTIONS
   //
-  // Matches backend.outfit_recommendation.CANONICAL_OCCASIONS -
-  // recommendations filter STRICTLY by this value now, so picking
-  // one here is what makes an item show up (or not) for a given
-  // occasion later.
+  // Matches backend.outfit_recommendation.CANONICAL_OCCASIONS.
+  // Occasion eligibility is AUTOMATIC now, worked out from an
+  // item's category (see backend/outfit_recommendation.py's
+  // infer_occasions_for_category) - nothing here is required at
+  // upload. This list is only used to (a) label the
+  // auto-detected occasions shown after upload / on each item
+  // card, and (b) let Edit optionally FORCE one extra occasion on
+  // top of whatever the category already implies, for the rare
+  // case where a specific item needs it (e.g. "this exact shirt is
+  // my interview shirt").
   // =========================================================
 
   const OCCASIONS = [
     ["casual", "Casual"],
-    ["outing", "Outing"],
-    ["formal", "Formal"],
+    ["day_outing", "Day Outing"],
+    ["college", "College"],
+    ["office", "Office"],
+    ["interview", "Interview"],
+    ["date", "Date"],
     ["party", "Party"],
-    ["festive", "Festive"],
+    ["wedding", "Wedding"],
     ["traditional", "Traditional"]
   ];
 
@@ -570,6 +625,8 @@ function Wardrobe() {
           <h1 className="page-title">My Digital Wardrobe</h1>
           <p className="page-subtitle">
             Your clothes, your style, all in one place.
+            {userGender === "male" && " Showing Men's Wear categories."}
+            {userGender === "female" && " Showing Women's Wear categories."}
           </p>
         </div>
       </div>
@@ -615,29 +672,12 @@ function Wardrobe() {
 
             </select>
 
-            {/* OCCASION */}
-
-            <label className="field-label">Occasion</label>
-
-            <select
-              value={occasion}
-              onChange={(e) =>
-                setOccasion(e.target.value)
-              }
-            >
-
-              {OCCASIONS.map(
-                ([value, label]) => (
-                  <option
-                    key={value}
-                    value={value}
-                  >
-                    {label}
-                  </option>
-                )
-              )}
-
-            </select>
+            {/* No occasion picker here - it's detected
+                automatically from the category above once the
+                item's added. See the alert after Add Item, or the
+                badges on each item card below; Edit an item if you
+                ever want to force a specific occasion on top of
+                that. */}
 
             {/* OPTIONAL MANUAL COLOR */}
 
@@ -991,6 +1031,10 @@ function Wardrobe() {
                         )}
                       </select>
 
+                      <label className="field-label">
+                        Force an occasion (optional)
+                      </label>
+
                       <select
                         value={editOccasion}
                         onChange={(e) =>
@@ -999,6 +1043,10 @@ function Wardrobe() {
                           )
                         }
                       >
+                        <option value="">
+                          Automatic (recommended)
+                        </option>
+
                         {OCCASIONS.map(
                           ([value, label]) => (
                             <option
@@ -1088,13 +1136,47 @@ function Wardrobe() {
                         </p>
                       )}
 
-                      {/* OCCASION */}
+                      {/* OCCASION - auto-detected from category,
+                          not something you tagged when adding this
+                          item. Shown as a short list of badges; a
+                          "+ forced: X" note appears only when Edit
+                          was used to add an occasion on top of
+                          that. */}
 
-                      <p className="item-meta">
-                        {OCCASIONS.find(
-                          ([value]) => value === item.occasion
-                        )?.[1] || "Casual"}
+                      <p
+                        className="item-meta"
+                        style={{
+                          display: "flex",
+                          flexWrap: "wrap",
+                          gap: "4px"
+                        }}
+                      >
+                        {(item.suitable_occasions &&
+                        item.suitable_occasions.length > 0
+                          ? item.suitable_occasions
+                          : ["casual"]
+                        ).map((value) => (
+                          <span key={value} className="badge">
+                            {OCCASIONS.find(
+                              ([v]) => v === value
+                            )?.[1] || value}
+                          </span>
+                        ))}
                       </p>
+
+                      {item.occasion && (
+                        <p
+                          style={{
+                            fontSize: "11px",
+                            color: "#8a7a6d"
+                          }}
+                        >
+                          + manually forced:{" "}
+                          {OCCASIONS.find(
+                            ([v]) => v === item.occasion
+                          )?.[1] || item.occasion}
+                        </p>
+                      )}
 
                       <div className="item-actions">
 

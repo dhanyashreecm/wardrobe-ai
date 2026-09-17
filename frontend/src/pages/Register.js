@@ -3,14 +3,38 @@ import axios from "axios";
 import { useNavigate, Link } from "react-router-dom";
 import "../App.css";
 
+// Single source of truth for the gender picker - shared with
+// Login.js's pre-fill picker (both read/write the same
+// "genderPreference" localStorage key, so a choice made on either
+// screen carries over to the other instead of the two silently
+// disagreeing).
+const GENDER_OPTIONS = [
+  { value: "Female", label: "Women", icon: "👗" },
+  { value: "Male", label: "Men", icon: "👔" }
+];
+
 function Register() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [gender, setGender] = useState("Female");
+
+  // Pre-filled from whatever was picked on the Login page (if
+  // anything), but this field - not Login's - is the one that
+  // actually gets submitted. No default: an empty string means
+  // "not chosen yet" and blocks submission, since gender is now
+  // mandatory and can never be changed after this form is submitted.
+  const [gender, setGender] = useState(
+    () => localStorage.getItem("genderPreference") || ""
+  );
+
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+
+  const chooseGender = (value) => {
+    setGender(value);
+    localStorage.setItem("genderPreference", value);
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -21,13 +45,23 @@ function Register() {
       return;
     }
 
+    if (gender !== "Male" && gender !== "Female") {
+      setError("Please choose Men or Women to continue - this can't be changed later.");
+      return;
+    }
+
     setLoading(true);
     try {
       const res = await axios.post("http://localhost:5001/api/register", {
         name, email, password, gender
       });
       if (res.data.success) {
+        // Done its job - clear it so a later visit to Login/Register
+        // for a DIFFERENT new account doesn't silently inherit it.
+        localStorage.removeItem("genderPreference");
         navigate("/login");
+      } else {
+        setError(res.data.message || "Registration failed");
       }
     } catch (err) {
       setError(err.response?.data?.message || "Registration failed");
@@ -102,28 +136,72 @@ function Register() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
+
+            {/* ================================================= */}
+            {/* GENDER - mandatory, permanent */}
+            {/* ================================================= */}
+
             <label className="field-label">
-              Wardrobe category set
+              Your wardrobe *
             </label>
-            <select
-              value={gender}
-              onChange={(e) => setGender(e.target.value)}
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: "10px",
+                marginBottom: "8px"
+              }}
             >
-              <option value="Female">Women</option>
-              <option value="Male">Men</option>
-            </select>
+              {GENDER_OPTIONS.map((opt) => {
+                const selected = gender === opt.value;
+
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => chooseGender(opt.value)}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "8px",
+                      padding: "12px 10px",
+                      borderRadius: "12px",
+                      border: selected
+                        ? "2px solid #c1694f"
+                        : "2px solid #ece1d6",
+                      background: selected ? "#fdf1ea" : "#fffaf5",
+                      cursor: "pointer",
+                      fontFamily: "inherit",
+                      fontWeight: selected ? 700 : 500
+                    }}
+                  >
+                    <span style={{ fontSize: "18px" }}>{opt.icon}</span>
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+
             <p
               style={{
                 fontSize: "12px",
                 color: "#8a7a6d",
-                margin: "-8px 0 12px"
+                margin: "-2px 0 14px"
               }}
             >
-              Just trims the category list to what's relevant to
-              you (e.g. hides Saree/Lehenga/Dress for Men) - you
-              can still add anything later.
+              Required, and <strong>permanent</strong> - it sets your
+              wardrobe's category list (e.g. Kurta/Sherwani/Dhoti
+              Pants for Men, Saree/Lehenga/Blouse for Women) and
+              keeps recommendations and AI detection scoped to it.
+              It cannot be changed after your account is created.
             </p>
-            <button type="submit" disabled={loading}>
+
+            <button
+              type="submit"
+              disabled={loading || (gender !== "Male" && gender !== "Female")}
+            >
               {loading ? "Creating account..." : "Create Account →"}
             </button>
           </form>

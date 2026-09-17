@@ -1,0 +1,22 @@
+# wardrobe-ai backend dependencies.
+# Install into your own virtual environment:
+#   python3 -m venv ai_env
+#   source ai_env/bin/activate   (Windows: ai_env\Scripts\activate)
+#   pip install -r backend/requirements.txt
+#
+# Exact versions weren't pinned here (couldn't run `pip freeze` against
+# the real macOS venv remotely) - if you hit a version-specific issue,
+# run `pip freeze > backend/requirements.txt` from the working ai_env
+# on the original machine and commit that instead.
+
+Flask
+Flask-Cors
+Flask-JWT-Extended
+pymongo
+bcrypt
+Pillow
+numpy
+tensorflow
+scikit-learn
+opencv-python
+joblib
