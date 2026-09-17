@@ -1,5 +1,6 @@
 import { useState } from "react";
 import axios from "axios";
+import Layout from "../components/Layout";
 import "../App.css";
 
 function SimilarSearch() {
@@ -68,34 +69,21 @@ function SimilarSearch() {
   };
 
   return (
-    <div className="page-container">
-      <div
-        className="auth-card"
-        style={{
-          maxWidth: "900px",
-          width: "100%",
-        }}
-      >
-        <div className="logo">Find Similar Clothes</div>
+    <Layout>
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Find Similar Clothes</h1>
+          <p className="page-subtitle">
+            Upload a clothing photo to check your wardrobe and
+            find visually similar clothes.
+          </p>
+        </div>
+      </div>
 
-        <p
-          style={{
-            color: "#777",
-            marginBottom: "20px",
-          }}
-        >
-          Upload a clothing photo to check your wardrobe
-          and find visually similar clothes.
-        </p>
-
+      <div className="side-panel" style={{ maxWidth: "420px" }}>
         {/* UPLOAD */}
 
-        <form
-          onSubmit={handleSearch}
-          style={{
-            marginBottom: "20px",
-          }}
-        >
+        <form onSubmit={handleSearch}>
           <input
             type="file"
             accept="image/*"
@@ -103,20 +91,20 @@ function SimilarSearch() {
               setImage(e.target.files[0]);
               setError("");
             }}
-            style={{
-              marginBottom: "14px",
-            }}
           />
-
-          <br />
 
           <button
             type="submit"
+            className="btn btn-primary"
             disabled={loading || !image}
+            style={{ width: "100%" }}
           >
             {loading ? "Searching..." : "Find Similar"}
           </button>
         </form>
+      </div>
+
+      <div style={{ marginTop: "28px" }}>
 
         {/* ERROR */}
 
@@ -459,7 +447,7 @@ function SimilarSearch() {
             </p>
           )}
       </div>
-    </div>
+    </Layout>
   );
 }
 
