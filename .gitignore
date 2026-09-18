@@ -34,3 +34,4 @@ backend/make_*.py
 Claude outputs/
 _snap2.tar.gz
 *.tar.gz
+*.zip
