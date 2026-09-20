@@ -67,6 +67,96 @@ def verify_login(email, password):
         return {"success": False, "message": "Incorrect password"}
 
 
+def get_user_profile(email):
+    """
+    Full profile info for the PROFILE PAGE - name, email, gender,
+    plus the two new optional fields (phone, profile_picture) added
+    this round. Only ever called with the CALLER's own email (taken
+    from their JWT in app.py, never a value supplied by the client),
+    so this can't be used to look up someone else's profile.
+
+    Returns None if the account somehow doesn't exist (shouldn't
+    happen for a valid JWT, but callers should treat None as a 404,
+    not assume a dict back).
+    """
+    user = users_collection.find_one({"email": email})
+
+    if not user:
+        return None
+
+    return {
+        "name": user.get("name"),
+        "email": user.get("email"),
+        "gender": user.get("gender"),
+        # Both optional and absent on most existing accounts - "" is
+        # the honest "not set yet" value the frontend already treats
+        # every other optional field (color, material, styling) as.
+        "phone": user.get("phone", ""),
+        "profile_picture": user.get("profile_picture", ""),
+    }
+
+
+def update_user_profile(email, name=None, phone=None):
+    """
+    Updates ONLY "name" and "phone" - the two fields that are
+    genuinely safe to let a user change themselves.
+
+    Email is deliberately NOT editable here: it's the account's
+    permanent identifier - the JWT identity, and every wardrobe item/
+    trip's user_email, are keyed on it - so changing it would orphan
+    all of that account's existing data. Gender is permanently locked
+    at registration (see register_user/migrate_user_gender above,
+    which remain the only things that ever write "gender"). Neither
+    is accepted as a parameter here at all, so there's no field name
+    a caller could pass to slip past that.
+    """
+    set_fields = {}
+
+    if name is not None and name.strip():
+        set_fields["name"] = name.strip()
+
+    if phone is not None:
+        # "" is a meaningful value here (clearing a previously-set
+        # phone number) - unlike name, which should never be blanked
+        # out to empty since every account must have SOME name.
+        set_fields["phone"] = phone.strip()
+
+    if not set_fields:
+        return {"success": False, "message": "Nothing to update"}
+
+    users_collection.update_one({"email": email}, {"$set": set_fields})
+
+    return {"success": True}
+
+
+def set_profile_picture(email, picture_url):
+    """
+    Records the URL of a just-uploaded profile picture (see
+    app.py's /api/user/profile/picture route, which does the actual
+    file handling - this just points the account at the result).
+    """
+    users_collection.update_one(
+        {"email": email}, {"$set": {"profile_picture": picture_url}}
+    )
+
+
+def delete_user_account(email):
+    """
+    Permanently deletes the account itself. Does NOT delete that
+    user's wardrobe items/trips/uploaded files - see app.py's
+    /api/user/account DELETE route, which calls this ALONGSIDE
+    wardrobe.delete_all_for_user() and trips.delete_all_for_user()
+    and removes their upload folder from disk, so all of an account's
+    data is cleaned up together rather than this function silently
+    doing only part of the job.
+
+    Returns False if there was no such account, so the caller can
+    turn that into a 404 instead of a silent success.
+    """
+    result = users_collection.delete_one({"email": email})
+    return result.deleted_count > 0
+
+
 def get_user_gender(email):
     """
     Looks up just the stored gender for a user, if any. Used by

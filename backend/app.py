@@ -7,17 +7,33 @@ from flask_jwt_extended import (
     jwt_required,
     get_jwt_identity
 )
-from backend.auth import register_user, verify_login, get_user_gender, migrate_user_gender
-from backend.wardrobe import add_item, get_user_wardrobe, delete_item, update_item
+from backend.auth import (
+    register_user,
+    verify_login,
+    get_user_gender,
+    migrate_user_gender,
+    get_user_profile,
+    update_user_profile,
+    set_profile_picture,
+    delete_user_account,
+)
+from backend.wardrobe import (
+    add_item,
+    get_user_wardrobe,
+    delete_item,
+    update_item,
+    delete_all_for_user as delete_all_wardrobe_for_user,
+)
 from backend.category_gender import is_allowed_for_account
 from backend.clothing_similarity import find_similar
 from backend.indofashion_similarity import find_similar_indofashion
 from backend.indofashion_classifier import predict_category
 from backend.weather import get_weather
 from backend.trip_planner import plan_trip
-from backend.trips import save_trip, get_user_trips
+from backend.trips import save_trip, get_user_trips, delete_all_for_user as delete_all_trips_for_user
 
 import os
+import shutil
 from werkzeug.utils import secure_filename
 
 
@@ -413,6 +429,14 @@ def add_wardrobe_item():
     material = request.form.get("material", "").strip()
 
     # -----------------------------------------------------
+    # Optional manual "styling" tag (Casual vs Wedding/Festive) -
+    # only meaningful for Saree/Lehenga/Kurta-type items, see
+    # Wardrobe.js STYLING_CATEGORIES and wardrobe.add_item().
+    # -----------------------------------------------------
+
+    styling = request.form.get("styling", "").strip()
+
+    # -----------------------------------------------------
     # Choose category
     #
     # Automatic detection gets priority for clothing.
@@ -435,7 +459,8 @@ def add_wardrobe_item():
         final_color,
         image_url,
         occasion,
-        material
+        material,
+        styling
     )
 
 
@@ -465,6 +490,8 @@ def add_wardrobe_item():
         ),
 
         "material": material,
+
+        "styling": styling,
 
         "image": image_url
 
@@ -576,7 +603,8 @@ def update_wardrobe_item(item_id):
             "color": data.get("color"),
             "occasion": data.get("occasion"),
             "material": data.get("material"),
-            "favorite": data.get("favorite")
+            "favorite": data.get("favorite"),
+            "styling": data.get("styling")
         }
     )
 
@@ -1090,6 +1118,138 @@ def list_trips():
     return jsonify({
         "success": True,
         "trips": trips
+    }), 200
+
+
+# =========================================================
+# USER PROFILE
+#
+# All three routes below use get_jwt_identity() as the ONLY source
+# of which account is being read/changed - never an email/id taken
+# from the request body or URL - so an account can only ever view,
+# edit, or delete ITSELF, never another user's profile.
+# =========================================================
+
+@app.route("/api/user/profile", methods=["GET"])
+@jwt_required()
+def get_profile():
+
+    user_email = get_jwt_identity()
+
+    profile = get_user_profile(user_email)
+
+    if not profile:
+        return jsonify({
+            "success": False,
+            "message": "Account not found"
+        }), 404
+
+    return jsonify({
+        "success": True,
+        "profile": profile
+    }), 200
+
+
+@app.route("/api/user/profile", methods=["PUT"])
+@jwt_required()
+def edit_profile():
+
+    user_email = get_jwt_identity()
+
+    data = request.json or {}
+
+    result = update_user_profile(
+        user_email,
+        name=data.get("name"),
+        phone=data.get("phone"),
+    )
+
+    status_code = 200 if result["success"] else 400
+
+    if result["success"]:
+        result["profile"] = get_user_profile(user_email)
+
+    return jsonify(result), status_code
+
+
+@app.route("/api/user/profile/picture", methods=["POST"])
+@jwt_required()
+def upload_profile_picture():
+
+    user_email = get_jwt_identity()
+
+    image = request.files.get("image")
+
+    if not image:
+        return jsonify({
+            "success": False,
+            "message": "No image provided"
+        }), 400
+
+    if not (image.content_type or "").startswith("image/"):
+        return jsonify({
+            "success": False,
+            "message": "Please upload an image file."
+        }), 400
+
+    folder_name, folder_path = get_user_folder(user_email)
+
+    # Always saved under the same fixed name (just keeping whatever
+    # extension was uploaded) rather than the original filename, so
+    # re-uploading a new profile picture cleanly REPLACES the old one
+    # instead of piling up "photo.jpg", "photo (1).jpg", etc. First,
+    # remove any previous profile_picture.* file under a DIFFERENT
+    # extension - otherwise switching from a .png to a .jpg would
+    # leave the old .png sitting there unused on disk forever.
+    extension = os.path.splitext(
+        secure_filename(image.filename or "")
+    )[1] or ".jpg"
+
+    for existing_name in os.listdir(folder_path):
+        if os.path.splitext(existing_name)[0] == "profile_picture":
+            os.remove(os.path.join(folder_path, existing_name))
+
+    filename = f"profile_picture{extension}"
+
+    image.save(os.path.join(folder_path, filename))
+
+    picture_url = f"/api/uploads/{folder_name}/{filename}"
+
+    set_profile_picture(user_email, picture_url)
+
+    return jsonify({
+        "success": True,
+        "profile_picture": picture_url
+    }), 200
+
+
+@app.route("/api/user/account", methods=["DELETE"])
+@jwt_required()
+def delete_account():
+
+    user_email = get_jwt_identity()
+
+    deleted = delete_user_account(user_email)
+
+    if not deleted:
+        return jsonify({
+            "success": False,
+            "message": "Account not found"
+        }), 404
+
+    # Clean up everything else this account owned - wardrobe items,
+    # saved trips, and the uploaded image files themselves (their
+    # whole folder, in one go, rather than one file at a time) - so
+    # deleting an account doesn't leave orphaned data behind that
+    # nobody can ever see or reach again.
+    delete_all_wardrobe_for_user(user_email)
+    delete_all_trips_for_user(user_email)
+
+    _, folder_path = get_user_folder(user_email)
+    shutil.rmtree(folder_path, ignore_errors=True)
+
+    return jsonify({
+        "success": True
     }), 200
 
 
