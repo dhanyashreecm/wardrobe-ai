@@ -20,3 +20,15 @@ tensorflow
 scikit-learn
 opencv-python
 joblib
+
+# Added with the shared-database/shared-images change:
+#   dnspython  - pymongo needs it to resolve a "mongodb+srv://" Atlas
+#                connection string; without it, connecting to Atlas
+#                fails with a DNS/SRV error even though the URI is
+#                correct.
+#   cloudinary - uploads wardrobe photos to shared cloud storage so
+#                they load on every computer (see backend/storage.py).
+#                Without it the app still runs, saving images to this
+#                machine's disk only, and says so at startup.
+dnspython
+cloudinary

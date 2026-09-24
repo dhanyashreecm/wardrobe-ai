@@ -4,7 +4,7 @@ from bson.objectid import ObjectId
 
 wardrobe_collection = db["wardrobe"]
 
-def add_item(user_email, category, color, image_path, occasion="", material=None):
+def add_item(user_email, category, color, image_path, occasion="", material=None, styling=None):
     # occasion is now an OPTIONAL manual override, not a required
     # field - "" (the default) means "fully automatic": which
     # occasions this item is eligible for gets worked out from its
@@ -25,8 +25,37 @@ def add_item(user_email, category, color, image_path, occasion="", material=None
     if material:
         item["material"] = material
 
+    # Optional manual "styling" tag - "Casual" or "Wedding/Festive" -
+    # offered only for Saree/Lehenga/Kurta-type items (see Wardrobe.js
+    # STYLING_CATEGORIES). This is what lets a user tell the app "this
+    # exact saree is a casual one" vs "this one is for weddings" - a
+    # distinction the AI model can never make on its own, since it
+    # only ever outputs the garment type ("saree"), not how formal a
+    # specific one is. Read by backend.style_compatibility.
+    # resolve_style() when scoring outfits.
+    if styling:
+        item["styling"] = styling
+
     result = wardrobe_collection.insert_one(item)
     return str(result.inserted_id)
+
+def delete_all_for_user(user_email):
+    """
+    Deletes every wardrobe item belonging to this account. Used only
+    by the "delete account" flow (see app.py's /api/user/account
+    DELETE route) - a wardrobe item is only ever meaningful tied to
+    the account that owns it, so once the account is gone these
+    would otherwise be orphaned rows nobody can see or clean up.
+    Does not touch the actual uploaded image files on disk - that's
+    handled separately by removing the whole user folder (see
+    get_user_folder() in app.py), since that folder holds the files
+    for every item at once rather than one at a time.
+
+    Returns how many items were deleted, purely informational.
+    """
+    result = wardrobe_collection.delete_many({"user_email": user_email})
+    return result.deleted_count
+
 
 def get_user_wardrobe(user_email):
     items = list(wardrobe_collection.find({"user_email": user_email}))
@@ -75,7 +104,7 @@ def update_item(item_id, user_email, updates):
     to fully automatic, category-based occasion detection), so it's
     not treated the same as "field omitted" the way other fields are.
     """
-    allowed_fields = {"category", "color", "occasion", "material", "favorite"}
+    allowed_fields = {"category", "color", "occasion", "material", "favorite", "styling"}
 
     set_fields = {}
 

@@ -2,6 +2,7 @@ import { useState } from "react";
 import axios from "axios";
 import Layout from "../components/Layout";
 import "../App.css";
+import { API_URL, assetUrl } from "../config";
 
 function SimilarSearch() {
   const [image, setImage] = useState(null);
@@ -35,7 +36,7 @@ function SimilarSearch() {
 
     try {
       const res = await axios.post(
-        "http://localhost:5001/api/ai/similar",
+        `${API_URL}/api/ai/similar`,
         formData,
         {
           headers: {
@@ -176,7 +177,7 @@ function SimilarSearch() {
                   }}
                 >
                   <img
-                    src={`http://localhost:5001${item.image}`}
+                    src={assetUrl(item.image)}
                     alt="Your wardrobe item"
                     style={{
                       width: "100%",
@@ -308,7 +309,7 @@ function SimilarSearch() {
                   }}
                 >
                   <img
-                    src={`http://localhost:5001/api/dataset/${item.image.replace(
+                    src={`${API_URL}/api/dataset/${item.image.replace(
                       /^dataset\/deepfashion\//,
                       ""
                     )}`}
@@ -390,7 +391,7 @@ function SimilarSearch() {
                     }}
                   >
                     <img
-                      src={`http://localhost:5001/api/indofashion/${imagePath}`}
+                      src={`${API_URL}/api/indofashion/${imagePath}`}
                       alt="Similar Indian clothing"
                       style={{
                         width: "100%",

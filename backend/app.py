@@ -7,17 +7,37 @@ from flask_jwt_extended import (
     jwt_required,
     get_jwt_identity
 )
-from backend.auth import register_user, verify_login, get_user_gender, migrate_user_gender
-from backend.wardrobe import add_item, get_user_wardrobe, delete_item, update_item
+from backend.auth import (
+    register_user,
+    verify_login,
+    get_user_gender,
+    migrate_user_gender,
+    get_user_profile,
+    update_user_profile,
+    set_profile_picture,
+    delete_user_account,
+)
+from backend.wardrobe import (
+    add_item,
+    get_user_wardrobe,
+    delete_item,
+    update_item,
+    delete_all_for_user as delete_all_wardrobe_for_user,
+)
 from backend.category_gender import is_allowed_for_account
+from backend.garment_taxonomy import model_may_override
 from backend.clothing_similarity import find_similar
 from backend.indofashion_similarity import find_similar_indofashion
 from backend.indofashion_classifier import predict_category
-from backend.weather import get_weather
+from backend.weather import get_weather, get_weather_forecast
 from backend.trip_planner import plan_trip
-from backend.trips import save_trip, get_user_trips
+from backend.trips import save_trip, get_user_trips, delete_all_for_user as delete_all_trips_for_user
+from backend.color_detection import detect_dominant_color
+from backend import config, storage
+from backend.db import ping as ping_database
 
 import os
+import shutil
 from werkzeug.utils import secure_filename
 
 
@@ -29,9 +49,25 @@ app = Flask(__name__)
 
 CORS(app)
 
-app.config["JWT_SECRET_KEY"] = "change-this-secret-key-later"
+# Signing key for login tokens, read from this machine's .env (see
+# config.py). It used to be a placeholder string committed in this
+# file, which meant anyone with a copy of the repository could forge a
+# login token for any account.
+# config.validate() (already run when backend.db was imported above)
+# refuses to start the app if it is missing, so this is never blank.
+app.config["JWT_SECRET_KEY"] = config.JWT_SECRET_KEY
 
 jwt = JWTManager(app)
+
+
+# One honest summary at startup of what this process is actually
+# connected to - which database, which image storage - so a machine
+# that is misconfigured says so in its own terminal instead of
+# silently building up a second, separate copy of the data.
+print(config.describe_startup())
+
+for _warning in config.validate(strict=False):
+    print(f"  WARNING: {_warning}")
 
 
 # =========================================================
@@ -99,17 +135,16 @@ ETHNIC_DETECTION_CONFIDENCE_THRESHOLD = 0.5
 
 # =========================================================
 # UPLOAD FOLDER
+#
+# Still used for two things after the move to Cloudinary: it is where
+# an uploaded file lands briefly so the AI modules (which read a
+# filesystem path, not a URL) can analyse it, and it is where images
+# uploaded BEFORE this change still live and are still served from.
+# It is no longer where a wardrobe image permanently lives - see
+# backend/storage.py.
 # =========================================================
 
-BASE_UPLOAD_FOLDER = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    "uploads"
-)
-
-os.makedirs(
-    BASE_UPLOAD_FOLDER,
-    exist_ok=True
-)
+BASE_UPLOAD_FOLDER = storage.BASE_UPLOAD_FOLDER
 
 
 # =========================================================
@@ -117,22 +152,59 @@ os.makedirs(
 # =========================================================
 
 def get_user_folder(user_email):
+    """
+    This user's folder on THIS machine's disk. Kept (delegating to
+    storage.py so there is one definition of the naming rule) because
+    legacy images live under it, deleting an account must clean it up,
+    and the AI step needs somewhere local to read the file from.
+    """
+    return storage.legacy_local_folder(user_email)
 
-    username = user_email.split("@")[0]
 
-    folder_name = f"{username}_digital_wardrobe"
+# =========================================================
+# HEALTH CHECK
+#
+# Answers the question you actually have when something looks wrong:
+# is the backend up, is it REACHING the shared database, and is it
+# storing images somewhere both computers can see?
+#
+# Deliberately unauthenticated (it is the thing you call when you
+# cannot log in) and therefore deliberately free of secrets: it
+# reports the database NAME and HOST but never the connection string,
+# and never any key, password or token. See config.safe_mongo_host().
+# =========================================================
 
-    folder_path = os.path.join(
-        BASE_UPLOAD_FOLDER,
-        folder_name
-    )
+@app.route("/api/health", methods=["GET"])
+def health():
 
-    os.makedirs(
-        folder_path,
-        exist_ok=True
-    )
+    database_ok, database_detail = ping_database()
 
-    return folder_name, folder_path
+    storage_backend = config.storage_backend()
+
+    payload = {
+        "status": "ok" if database_ok else "degraded",
+        "backend": "ok",
+        "database": {
+            "connected": database_ok,
+            "detail": database_detail,
+            "name": config.MONGODB_DB_NAME,
+            "host": config.safe_mongo_host(),
+        },
+        "storage": {
+            "backend": storage_backend,
+            # "shared" is the property that actually matters for
+            # multi-device use: local storage works, but only on the
+            # one machine holding the files.
+            "shared_across_devices": storage_backend == "cloudinary",
+        },
+        "weather": {
+            "configured": bool(config.OPENWEATHER_API_KEY),
+        },
+    }
+
+    # 503 when the database is unreachable so uptime checks and
+    # scripts can rely on the status code alone, not just the body.
+    return jsonify(payload), (200 if database_ok else 503)
 
 
 # =========================================================
@@ -268,7 +340,23 @@ def add_wardrobe_item():
 
     manual_category = request.form.get("category")
 
-    manual_color = request.form.get("color")
+    # Did the user actually PICK this category, or is it just the
+    # dropdown's default sitting there untouched?
+    #
+    # This distinction decides whether the model is allowed to
+    # overrule it. Someone uploading twenty sarees without touching
+    # the selector wants the AI to name them - refusing there would
+    # make the app's best feature useless. Someone who deliberately
+    # chose "Jeans" has told us something the model cannot know, and
+    # overwriting that is what produced "my jeans became leggings".
+    #
+    # Sent by Wardrobe.js, which knows whether the select was
+    # interacted with. Absent (an older frontend, or a direct API
+    # call) is treated as "not explicitly chosen", preserving the
+    # previous behaviour rather than silently tightening it.
+    category_explicitly_chosen = (
+        request.form.get("category_explicit", "").strip().lower() == "true"
+    )
 
     # Occasion is now an OPTIONAL manual override, not something the
     # user has to pick when uploading - the whole point of this app
@@ -295,17 +383,20 @@ def add_wardrobe_item():
 
 
     # -----------------------------------------------------
-    # User folder
+    # Save image
+    #
+    # The file is written to this machine's disk FIRST, even when
+    # Cloudinary is configured, because the AI steps below
+    # (predict_category, detect_dominant_color) open a filesystem
+    # path, not a URL - keeping a local copy is the smallest possible
+    # change that leaves those modules untouched. The local copy is a
+    # working file, not the permanent home: the permanent home is
+    # whatever storage.save_image() returns.
     # -----------------------------------------------------
 
     folder_name, folder_path = get_user_folder(
         user_email
     )
-
-
-    # -----------------------------------------------------
-    # Save image
-    # -----------------------------------------------------
 
     filename = secure_filename(
         image.filename
@@ -320,14 +411,46 @@ def add_wardrobe_item():
 
 
     # -----------------------------------------------------
-    # Image URL
+    # Permanent image URL
+    #
+    # With Cloudinary configured this is an https URL that loads on
+    # ANY computer - which is what lets the same account see the same
+    # wardrobe from a second laptop. Without it, this falls back to
+    # the original "/api/uploads/..." path served by this machine
+    # (see storage.py), so a single-machine setup still works.
+    #
+    # An upload failure is returned as an error rather than swallowed:
+    # saving a wardrobe row whose image never reached storage would
+    # leave a permanently broken item in the user's wardrobe.
     # -----------------------------------------------------
 
-    image_url = (
-        f"/api/uploads/"
-        f"{folder_name}/"
-        f"{filename}"
-    )
+    if config.storage_backend() == "cloudinary":
+
+        try:
+            image_url = storage.upload_local_file(
+                path,
+                user_email,
+                kind="wardrobe",
+            )
+
+        except storage.StorageError as error:
+
+            print(f"Image upload failed for {filename}: {error}")
+
+            return jsonify({
+                "success": False,
+                "message":
+                    "Couldn't upload this image to cloud storage. Please "
+                    "check your internet connection and try again."
+            }), 502
+
+    else:
+
+        image_url = (
+            f"/api/uploads/"
+            f"{folder_name}/"
+            f"{filename}"
+        )
 
 
     # AUTOMATIC CATEGORY DETECTION
@@ -355,6 +478,13 @@ def add_wardrobe_item():
     detected_category = None
     category_confidence = None
 
+    # A prediction the model is NOT entitled to apply on its own (see
+    # garment_taxonomy.model_may_override) - offered back to the user
+    # to confirm or reject instead of being written over their choice.
+    suggested_category = None
+    suggestion_confidence = None
+    suggestion_reason = None
+
     if manual_category not in ACCESSORY_CATEGORIES:
 
         try:
@@ -372,20 +502,49 @@ def add_wardrobe_item():
 
             candidate_label = ETHNIC_AUTO_CATEGORIES.get(raw_category)
 
-            if (
-                candidate_label
-                and raw_confidence >= ETHNIC_DETECTION_CONFIDENCE_THRESHOLD
-                and is_allowed_for_account(candidate_label, account_gender)
-            ):
+            confident = raw_confidence >= ETHNIC_DETECTION_CONFIDENCE_THRESHOLD
 
-                detected_category = candidate_label
-                category_confidence = raw_confidence
+            gender_ok = candidate_label and is_allowed_for_account(
+                candidate_label, account_gender
+            )
 
-                print(
-                    f"Auto-detected category for {filename}: "
-                    f"{detected_category} "
-                    f"(confidence: {category_confidence:.2f})"
+            if candidate_label and confident and gender_ok:
+
+                # The model has never seen a pair of jeans, a skirt or
+                # a crop top - it only knows its 15 ethnic classes, so
+                # for anything else it returns the nearest one of
+                # those (jeans -> leggings_and_salwars, skirt ->
+                # petticoat, crop top -> blouse). Letting that
+                # overwrite the user's own choice is what made the app
+                # rename people's clothes. It may refine within a
+                # family; across families it can only suggest.
+                allowed, reason = model_may_override(
+                    manual_category if category_explicitly_chosen else None,
+                    candidate_label,
                 )
+
+                if allowed:
+
+                    detected_category = candidate_label
+                    category_confidence = raw_confidence
+
+                    print(
+                        f"Auto-detected category for {filename}: "
+                        f"{detected_category} "
+                        f"(confidence: {category_confidence:.2f}) - {reason}"
+                    )
+
+                else:
+
+                    suggested_category = candidate_label
+                    suggestion_confidence = raw_confidence
+                    suggestion_reason = reason
+
+                    print(
+                        f"Model suggested {candidate_label} for {filename} "
+                        f"(confidence: {raw_confidence:.2f}) but kept the "
+                        f"user's '{manual_category}': {reason}"
+                    )
 
         except Exception as e:
 
@@ -396,14 +555,34 @@ def add_wardrobe_item():
 
 
     # -----------------------------------------------------
-    # Color entered manually by the user
+    # Color - manual entry always wins when provided. When the
+    # user leaves it blank, the color is auto-detected from the
+    # photo itself instead of blocking the upload (see
+    # backend.color_detection.detect_dominant_color). This never
+    # overrides a color the user actually typed - it only fills in
+    # the gap when they didn't.
     # -----------------------------------------------------
 
-    final_color = request.form.get("color", "").strip()
+    manual_color = request.form.get("color", "").strip()
+
+    color_auto_detected = False
+
+    if manual_color:
+        final_color = manual_color
+    else:
+        detected = detect_dominant_color(path)
+
+        if detected:
+            final_color = detected
+            color_auto_detected = True
+        else:
+            final_color = ""
 
     if not final_color:
         return jsonify({
-            "error": "Please enter a color."
+            "error":
+                "Couldn't detect a color from this photo - please "
+                "enter one."
         }), 400
 
     # -----------------------------------------------------
@@ -411,6 +590,14 @@ def add_wardrobe_item():
     # -----------------------------------------------------
 
     material = request.form.get("material", "").strip()
+
+    # -----------------------------------------------------
+    # Optional manual "styling" tag (Casual vs Wedding/Festive) -
+    # only meaningful for Saree/Lehenga/Kurta-type items, see
+    # Wardrobe.js STYLING_CATEGORIES and wardrobe.add_item().
+    # -----------------------------------------------------
+
+    styling = request.form.get("styling", "").strip()
 
     # -----------------------------------------------------
     # Choose category
@@ -435,7 +622,8 @@ def add_wardrobe_item():
         final_color,
         image_url,
         occasion,
-        material
+        material,
+        styling
     )
 
 
@@ -453,6 +641,8 @@ def add_wardrobe_item():
 
         "color": final_color,
 
+        "color_auto_detected": color_auto_detected,
+
         "occasion": occasion,
 
         # What occasion(s) this item is ACTUALLY eligible for, worked
@@ -466,7 +656,34 @@ def add_wardrobe_item():
 
         "material": material,
 
-        "image": image_url
+        "styling": styling,
+
+        "image": image_url,
+
+        # What the model thought, when it was not entitled to act on
+        # it by itself. The frontend shows this as "the AI thinks this
+        # might be X - keep yours, or switch?" so a genuinely useful
+        # correction is one click away, while a wrong guess costs the
+        # user nothing. Absent when the model agreed, stayed quiet, or
+        # was allowed to decide.
+        "suggested_category": suggested_category,
+
+        "suggestion_confidence": (
+            round(suggestion_confidence, 2)
+            if suggestion_confidence is not None else None
+        ),
+
+        "suggestion_reason": suggestion_reason,
+
+        "needs_confirmation": bool(suggested_category),
+
+        # How confident the model was in a category it DID apply -
+        # surfaced so the UI can be honest about an uncertain
+        # auto-detection rather than presenting every one as fact.
+        "category_confidence": (
+            round(category_confidence, 2)
+            if category_confidence is not None else None
+        )
 
     }), 200
 
@@ -576,7 +793,8 @@ def update_wardrobe_item(item_id):
             "color": data.get("color"),
             "occasion": data.get("occasion"),
             "material": data.get("material"),
-            "favorite": data.get("favorite")
+            "favorite": data.get("favorite"),
+            "styling": data.get("styling")
         }
     )
 
@@ -871,10 +1089,33 @@ def recommend_outfit():
         )
 
         # Optional city -> weather nudges the ranking, but is
-        # never required. Any failure (no API key configured,
-        # bad city name, network issue) just means recommendations
-        # come back without a weather boost, not a broken request.
+        # never required. An explicit ?city= always wins; otherwise,
+        # UNLESS the caller explicitly opted out with
+        # ?use_weather=false (see OutfitRecommendation.js's "Consider
+        # today's weather" checkbox), fall back to the user's saved
+        # default city (Profile page) so weather applies
+        # automatically once someone has set one - they shouldn't
+        # have to retype their city every visit. Any weather-lookup
+        # failure (no API key configured, bad city name, network
+        # issue) just means recommendations come back without a
+        # weather boost, not a broken request.
         city = request.args.get("city")
+        used_saved_city = False
+
+        use_weather = request.args.get("use_weather", "true").lower() != "false"
+
+        if not city and use_weather:
+            profile = get_user_profile(user_email)
+            saved_city = (profile or {}).get("city")
+            if saved_city:
+                city = saved_city
+                used_saved_city = True
+
+        # Optional activity tag (see outfit_recommendation.
+        # CANONICAL_ACTIVITIES) - purely additive, never required and
+        # never filters anything out on its own; an unrecognized or
+        # missing value is simply ignored.
+        activity = request.args.get("activity")
 
         weather = None
         weather_error = None
@@ -904,7 +1145,8 @@ def recommend_outfit():
             wardrobe_items,
             occasion=occasion,
             weather=weather,
-            account_gender=account_gender
+            account_gender=account_gender,
+            activity=activity
         )
 
         # Honest "missing item" messaging (spec section 10) - tells
@@ -929,7 +1171,12 @@ def recommend_outfit():
 
             "weather": weather,
 
-            "weather_error": weather_error
+            "weather_error": weather_error,
+
+            # Lets the frontend show "using your saved city, X" vs
+            # an explicit one-off lookup, instead of guessing from
+            # the query string it doesn't have direct access to.
+            "used_saved_city": used_saved_city
 
         }), 200
 
@@ -999,12 +1246,24 @@ def create_trip():
     start_date = data.get("start_date")
     end_date = data.get("end_date")
     occasion = data.get("occasion", "casual")
+    activity = data.get("activity")
 
     # Weather for the destination is optional - a lookup failure
-    # (no API key configured, unknown city, etc) should never
-    # block the trip plan itself.
+    # (no API key configured, unknown city, etc) should never block
+    # the trip plan itself. Two separate lookups:
+    #   - `weather`: a single current-weather reading, shown as the
+    #     one-line summary in the sidebar and used as the fallback
+    #     for any day the forecast doesn't cover.
+    #   - `weather_by_date`: the actual per-day forecast (see
+    #     backend.weather.get_weather_forecast) - this is what lets
+    #     each day of the trip get its OWN weather-appropriate
+    #     outfit instead of every day sharing one reading. Only
+    #     covers ~5 days out (OpenWeatherMap's free tier); days
+    #     beyond that fall back inside plan_trip() itself.
     weather = None
     weather_error = None
+    weather_by_date = None
+    forecast_error = None
 
     if destination:
 
@@ -1015,6 +1274,15 @@ def create_trip():
         except Exception as e:
 
             weather_error = str(e)
+
+        try:
+
+            forecast = get_weather_forecast(destination)
+            weather_by_date = forecast.get("by_date") or None
+
+        except Exception as e:
+
+            forecast_error = str(e)
 
     if not destination or not start_date or not end_date:
 
@@ -1037,7 +1305,9 @@ def create_trip():
             end_date,
             occasion=occasion,
             weather=weather,
-            account_gender=account_gender
+            weather_by_date=weather_by_date,
+            account_gender=account_gender,
+            activity=activity
         )
 
     except ValueError as e:
@@ -1071,7 +1341,9 @@ def create_trip():
 
         "weather": weather,
 
-        "weather_error": weather_error
+        "weather_error": weather_error,
+
+        "forecast_error": forecast_error
 
     }), 200
 
@@ -1090,6 +1362,166 @@ def list_trips():
     return jsonify({
         "success": True,
         "trips": trips
+    }), 200
+
+
+# =========================================================
+# USER PROFILE
+#
+# All three routes below use get_jwt_identity() as the ONLY source
+# of which account is being read/changed - never an email/id taken
+# from the request body or URL - so an account can only ever view,
+# edit, or delete ITSELF, never another user's profile.
+# =========================================================
+
+@app.route("/api/user/profile", methods=["GET"])
+@jwt_required()
+def get_profile():
+
+    user_email = get_jwt_identity()
+
+    profile = get_user_profile(user_email)
+
+    if not profile:
+        return jsonify({
+            "success": False,
+            "message": "Account not found"
+        }), 404
+
+    return jsonify({
+        "success": True,
+        "profile": profile
+    }), 200
+
+
+@app.route("/api/user/profile", methods=["PUT"])
+@jwt_required()
+def edit_profile():
+
+    user_email = get_jwt_identity()
+
+    data = request.json or {}
+
+    result = update_user_profile(
+        user_email,
+        name=data.get("name"),
+        phone=data.get("phone"),
+        city=data.get("city"),
+    )
+
+    status_code = 200 if result["success"] else 400
+
+    if result["success"]:
+        result["profile"] = get_user_profile(user_email)
+
+    return jsonify(result), status_code
+
+
+@app.route("/api/user/profile/picture", methods=["POST"])
+@jwt_required()
+def upload_profile_picture():
+
+    user_email = get_jwt_identity()
+
+    image = request.files.get("image")
+
+    if not image:
+        return jsonify({
+            "success": False,
+            "message": "No image provided"
+        }), 400
+
+    if not (image.content_type or "").startswith("image/"):
+        return jsonify({
+            "success": False,
+            "message": "Please upload an image file."
+        }), 400
+
+    folder_name, folder_path = get_user_folder(user_email)
+
+    # Always saved under the same fixed name (just keeping whatever
+    # extension was uploaded) rather than the original filename, so
+    # re-uploading a new profile picture cleanly REPLACES the old one
+    # instead of piling up "photo.jpg", "photo (1).jpg", etc. First,
+    # remove any previous profile_picture.* file under a DIFFERENT
+    # extension - otherwise switching from a .png to a .jpg would
+    # leave the old .png sitting there unused on disk forever.
+    extension = os.path.splitext(
+        secure_filename(image.filename or "")
+    )[1] or ".jpg"
+
+    for existing_name in os.listdir(folder_path):
+        if os.path.splitext(existing_name)[0] == "profile_picture":
+            os.remove(os.path.join(folder_path, existing_name))
+
+    filename = f"profile_picture{extension}"
+
+    local_path = os.path.join(folder_path, filename)
+
+    image.save(local_path)
+
+    # Same reasoning as the wardrobe upload: with Cloudinary
+    # configured the stored URL must be one that loads from any
+    # computer, otherwise this user's profile picture would appear
+    # broken as soon as they logged in somewhere else.
+    if config.storage_backend() == "cloudinary":
+
+        try:
+            picture_url = storage.upload_local_file(
+                local_path,
+                user_email,
+                kind="profile",
+            )
+
+        except storage.StorageError as error:
+
+            print(f"Profile picture upload failed: {error}")
+
+            return jsonify({
+                "success": False,
+                "message":
+                    "Couldn't upload your picture to cloud storage. Please "
+                    "check your internet connection and try again."
+            }), 502
+
+    else:
+        picture_url = f"/api/uploads/{folder_name}/{filename}"
+
+    set_profile_picture(user_email, picture_url)
+
+    return jsonify({
+        "success": True,
+        "profile_picture": picture_url
+    }), 200
+
+
+@app.route("/api/user/account", methods=["DELETE"])
+@jwt_required()
+def delete_account():
+
+    user_email = get_jwt_identity()
+
+    deleted = delete_user_account(user_email)
+
+    if not deleted:
+        return jsonify({
+            "success": False,
+            "message": "Account not found"
+        }), 404
+
+    # Clean up everything else this account owned - wardrobe items,
+    # saved trips, and the uploaded image files themselves (their
+    # whole folder, in one go, rather than one file at a time) - so
+    # deleting an account doesn't leave orphaned data behind that
+    # nobody can ever see or reach again.
+    delete_all_wardrobe_for_user(user_email)
+    delete_all_trips_for_user(user_email)
+
+    _, folder_path = get_user_folder(user_email)
+    shutil.rmtree(folder_path, ignore_errors=True)
+
+    return jsonify({
+        "success": True
     }), 200
 
 

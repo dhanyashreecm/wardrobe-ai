@@ -6,6 +6,10 @@ from tensorflow.keras.applications import MobileNetV2
 from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
 from tensorflow.keras.preprocessing import image
 
+# Only used to turn a cloud image URL back into a local file this
+# module can read - see find_similar_in_wardrobe().
+from backend import storage
+
 
 # ============================================================
 # BASE DIRECTORY
@@ -471,9 +475,33 @@ def find_similar_in_wardrobe(
 
         # ----------------------------------------------------
         # Convert API URL to local path
+        #
+        # Three shapes have to resolve to a readable FILE here,
+        # because extract_feature() below opens a path, not a URL:
+        #
+        #   1. "https://res.cloudinary.com/..." - an item uploaded
+        #      since images moved to shared cloud storage. Fetched
+        #      once and cached on this machine (storage.local_copy_of).
+        #      Without this branch every such item would fail the
+        #      .exists() check below and silently drop out of the
+        #      results, making "find similar in my wardrobe" look
+        #      broken for anything uploaded after the move.
+        #   2. "/api/uploads/..." - an older item still on this disk.
+        #   3. a bare relative path - oldest records.
         # ----------------------------------------------------
 
-        if image_url.startswith(
+        if image_url.startswith(("http://", "https://")):
+
+            cached = storage.local_copy_of(image_url)
+
+            if not cached:
+                # Already logged by local_copy_of - skip this one item
+                # rather than failing the whole search.
+                continue
+
+            wardrobe_image_path = Path(cached)
+
+        elif image_url.startswith(
             "/api/uploads/"
         ):
 

@@ -17,9 +17,28 @@ uploads/
 # React build
 frontend/build/
 
-# Environment files
+# Environment files - these hold the database password, the Cloudinary
+# secret and the token signing key. Never commit them: anyone with
+# them can read or delete every user's data. If one is ever committed,
+# rotate the credential itself, since deleting the file does not
+# remove it from git history.
 .env
 .env.*
+
+# ...but the TEMPLATES must be committed - they are how the other
+# developer knows which variables to set. These negations have to come
+# after the ".env.*" rule above, which would otherwise exclude them.
+!.env.example
+!frontend/.env.example
+
+# Written by the two-computer test (backend/sync_test.py): the
+# throwaway test account's password and probe marker. Local to each
+# machine, never anyone's real data - but a password all the same.
+sync_test_state.json
+
+# Local database snapshots written by backend/sync_setup.py before a
+# migration. They contain real user records, so they stay off GitHub.
+backups/
 
 # Generated/temporary scripts
 frontend/src/make_*.py

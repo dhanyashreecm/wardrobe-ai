@@ -7,6 +7,7 @@ const NAV_ITEMS = [
   { to: "/recommend", label: "Recommend Outfit", icon: "✨" },
   { to: "/trip", label: "Trip Planner", icon: "🧳" },
   { to: "/similar", label: "Similar Search", icon: "🔍" },
+  { to: "/profile", label: "Profile", icon: "👤" },
 ];
 
 function Sidebar() {
@@ -14,7 +15,13 @@ function Sidebar() {
   const location = useLocation();
 
   const handleLogout = () => {
+    // Also clears "gender" - previously only "token" was cleared
+    // here, unlike every other logout/session-expiry path in this
+    // app (Dashboard.js, Wardrobe.js, Profile.js), which left a
+    // stale gender value sitting in localStorage after a normal
+    // logout from the sidebar.
     localStorage.removeItem("token");
+    localStorage.removeItem("gender");
     navigate("/login");
   };
 

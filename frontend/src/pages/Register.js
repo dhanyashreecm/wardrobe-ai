@@ -2,6 +2,7 @@ import { useState } from "react";
 import axios from "axios";
 import { useNavigate, Link } from "react-router-dom";
 import "../App.css";
+import { API_URL } from "../config";
 
 // Single source of truth for the gender picker - shared with
 // Login.js's pre-fill picker (both read/write the same
@@ -52,7 +53,7 @@ function Register() {
 
     setLoading(true);
     try {
-      const res = await axios.post("http://localhost:5001/api/register", {
+      const res = await axios.post(`${API_URL}/api/register`, {
         name, email, password, gender
       });
       if (res.data.success) {

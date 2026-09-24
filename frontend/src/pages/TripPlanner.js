@@ -2,6 +2,7 @@ import { useState } from "react";
 import axios from "axios";
 import Layout from "../components/Layout";
 import "../App.css";
+import { API_URL, assetUrl } from "../config";
 
 // Matches backend.outfit_recommendation.CANONICAL_OCCASIONS.
 const OCCASIONS = [
@@ -54,7 +55,7 @@ function TripPlanner() {
 
     try {
       const res = await axios.post(
-        "http://localhost:5001/api/trips",
+        `${API_URL}/api/trips`,
         {
           destination,
           start_date: startDate,
@@ -167,6 +168,10 @@ function TripPlanner() {
               }}
             >
               {weather.city}: {weather.temp_c}°C, {weather.description}
+              {weather.humidity_pct != null &&
+                ` · humidity ${weather.humidity_pct}%`}
+              {weather.wind_kph != null &&
+                ` · wind ${weather.wind_kph} km/h`}
             </p>
           )}
 
@@ -205,6 +210,30 @@ function TripPlanner() {
                     Day {day.day_number} — {day.date}
                   </h3>
 
+                  {day.weather && (
+                    <p
+                      style={{
+                        margin: "0 0 10px",
+                        color: "#8a7a6d",
+                        fontSize: "13px",
+                      }}
+                    >
+                      {day.weather.temp_c}°C
+                      {day.weather.temp_min_c !== undefined &&
+                        day.weather.temp_max_c !== undefined &&
+                        ` (${day.weather.temp_min_c}–${day.weather.temp_max_c}°C)`}
+                      {day.weather.description
+                        ? `, ${day.weather.description}`
+                        : ""}
+                      {day.weather.humidity_pct != null &&
+                        `, humidity ${day.weather.humidity_pct}%`}
+                      {day.weather.wind_kph != null &&
+                        `, wind ${day.weather.wind_kph} km/h`}
+                      {day.weather_estimated &&
+                        " — estimated (beyond the 5-day forecast)"}
+                    </p>
+                  )}
+
                   <div
                     style={{
                       display: "flex",
@@ -219,7 +248,7 @@ function TripPlanner() {
                       >
                         {item.image_path && (
                           <img
-                            src={`http://localhost:5001${item.image_path}`}
+                            src={assetUrl(item.image_path)}
                             alt={item.category || "Clothing item"}
                             onError={(e) => {
                               e.currentTarget.style.display = "none";

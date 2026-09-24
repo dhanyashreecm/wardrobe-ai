@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import axios from "axios";
 import { useNavigate, Link } from "react-router-dom";
 import "../App.css";
+import { API_URL } from "../config";
 
 // Shown on the Login page purely as a convenience PRE-FILL for the
 // Register screen (this is where a NEW account's choice is actually
@@ -56,7 +57,7 @@ function Login() {
     setLoading(true);
 
     try {
-      const res = await axios.post("http://localhost:5001/api/login", {
+      const res = await axios.post(`${API_URL}/api/login`, {
         email, password
       });
       if (res.data.success) {
@@ -91,7 +92,7 @@ function Login() {
 
     try {
       const res = await axios.post(
-        "http://localhost:5001/api/user/gender/migrate",
+        `${API_URL}/api/user/gender/migrate`,
         { gender: migrationChoice },
         { headers: { Authorization: `Bearer ${pendingToken}` } }
       );

@@ -3,6 +3,7 @@ import axios from "axios";
 import { useNavigate, Link } from "react-router-dom";
 import Layout from "../components/Layout";
 import "../App.css";
+import { API_URL, assetUrl } from "../config";
 
 // =========================================================
 // CATEGORY BUCKETS
@@ -93,7 +94,7 @@ function Dashboard() {
     }
 
     axios
-      .get("http://localhost:5001/api/wardrobe", {
+      .get(`${API_URL}/api/wardrobe`, {
         headers: { Authorization: `Bearer ${token}` },
       })
       .then((res) => setItems(res.data.items || []))
@@ -245,7 +246,7 @@ function Dashboard() {
                     {tile.cover && (
                       <>
                         <img
-                          src={`http://localhost:5001${tile.cover.image_path}`}
+                          src={assetUrl(tile.cover.image_path)}
                           alt={tile.label}
                         />
                         <div className="tile-overlay" />

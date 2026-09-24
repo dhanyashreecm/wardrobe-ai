@@ -4,16 +4,38 @@ import { useNavigate } from "react-router-dom";
 import Cropper from "react-easy-crop";
 import Layout from "../components/Layout";
 import "../App.css";
+import { API_URL, assetUrl } from "../config";
 
 function Wardrobe() {
   const [items, setItems] = useState([]);
 
   const [category, setCategory] = useState("Shirt");
+
+  // Whether the user actually opened the category dropdown and chose,
+  // as opposed to leaving it on its default. The backend needs this
+  // to know whose answer wins when the AI disagrees: an untouched
+  // default should not stop the AI naming an obvious saree, while a
+  // deliberate "Jeans" should not be overwritten by a model that has
+  // never seen jeans. Reset after every upload so the next item
+  // starts from a clean slate.
+  const [categoryChosen, setCategoryChosen] = useState(false);
   const [color, setColor] = useState("");
   const [material, setMaterial] = useState("");
+  // Optional manual override for Saree/Lehenga/Kurta-type items -
+  // see STYLING_CATEGORIES below. "" = not set (the AI's default
+  // style inference is used as-is).
+  const [styling, setStyling] = useState("");
   const [image, setImage] = useState(null);
 
   const [loading, setLoading] = useState(false);
+
+  // Set when the AI read the photo as something other than the
+  // category the user picked, in a case where it is NOT entitled to
+  // decide on its own (see backend/garment_taxonomy.py). The item is
+  // already saved under the user's own choice; this only offers the
+  // alternative. Null the rest of the time, so nothing appears when
+  // the AI agreed or stayed quiet.
+  const [pendingSuggestion, setPendingSuggestion] = useState(null);
 
   const [filterCategory, setFilterCategory] = useState("All");
 
@@ -36,6 +58,7 @@ function Wardrobe() {
   // case now. Only set to a real occasion value when deliberately
   // forcing one extra occasion on top of what the category implies.
   const [editOccasion, setEditOccasion] = useState("");
+  const [editStyling, setEditStyling] = useState("");
   const [editSaving, setEditSaving] = useState(false);
 
   // =========================================================
@@ -65,7 +88,7 @@ function Wardrobe() {
   const fetchItems = async () => {
     try {
       const res = await axios.get(
-        "http://localhost:5001/api/wardrobe",
+        `${API_URL}/api/wardrobe`,
         {
           headers: {
             Authorization: `Bearer ${token}`
@@ -284,6 +307,8 @@ function Wardrobe() {
 
     formData.append("category", category);
 
+    formData.append("category_explicit", categoryChosen ? "true" : "false");
+
     /*
      * Color is optional now.
      *
@@ -297,6 +322,10 @@ function Wardrobe() {
       formData.append("material", material);
     }
 
+    if (styling) {
+      formData.append("styling", styling);
+    }
+
     // No occasion field here on purpose - the whole point of this
     // app is that the occasion(s) an item fits get worked out
     // automatically from its (AI-detected, or manually chosen)
@@ -308,7 +337,7 @@ function Wardrobe() {
 
     try {
       const response = await axios.post(
-        "http://localhost:5001/api/wardrobe/add",
+        `${API_URL}/api/wardrobe/add`,
         formData,
         {
           headers: {
@@ -325,9 +354,13 @@ function Wardrobe() {
 
       // Reset form
 
+      setCategoryChosen(false);
+
       setColor("");
 
       setMaterial("");
+
+      setStyling("");
 
       setImage(null);
 
@@ -363,14 +396,28 @@ function Wardrobe() {
           )
           .join(", ");
 
-      alert(
-        `Item added successfully!\n` +
-          `Detected color: ${response.data.color || "Unknown"}\n` +
-          `Category: ${response.data.category}\n` +
-          `Automatically suitable for: ${
-            detectedOccasions || "every occasion"
-          }`
-      );
+      if (response.data.needs_confirmation) {
+        // Shown as a panel rather than an alert: the user needs to
+        // look at the photo they just uploaded to answer it, which an
+        // alert would cover up.
+        setPendingSuggestion({
+          itemId: response.data.item_id,
+          savedCategory: response.data.category,
+          suggestedCategory: response.data.suggested_category,
+          confidence: response.data.suggestion_confidence,
+          color: response.data.color,
+          image: response.data.image,
+        });
+      } else {
+        alert(
+          `Item added successfully!\n` +
+            `Detected color: ${response.data.color || "Unknown"}\n` +
+            `Category: ${response.data.category}\n` +
+            `Automatically suitable for: ${
+              detectedOccasions || "every occasion"
+            }`
+        );
+      }
     } catch (err) {
       console.error(
         "Upload failed:",
@@ -387,13 +434,43 @@ function Wardrobe() {
   };
 
   // =========================================================
+  // ACCEPT / REJECT AN AI CATEGORY SUGGESTION
+  //
+  // The item is already saved under the user's own category, so
+  // rejecting costs nothing (just dismiss) and accepting is a normal
+  // category edit through the existing update route - no special
+  // endpoint, and the same ownership checks apply.
+  // =========================================================
+
+  const acceptSuggestion = async () => {
+    if (!pendingSuggestion) return;
+
+    try {
+      const token = localStorage.getItem("token");
+
+      await axios.put(
+        `${API_URL}/api/wardrobe/${pendingSuggestion.itemId}`,
+        { category: pendingSuggestion.suggestedCategory },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      fetchItems();
+    } catch (err) {
+      console.error("Could not apply the suggested category:", err);
+      alert("Couldn't change the category - please try editing the item.");
+    } finally {
+      setPendingSuggestion(null);
+    }
+  };
+
+  // =========================================================
   // DELETE ITEM
   // =========================================================
 
   const handleDelete = async (id) => {
     try {
       await axios.delete(
-        `http://localhost:5001/api/wardrobe/${id}`,
+        `${API_URL}/api/wardrobe/${id}`,
         {
           headers: {
             Authorization: `Bearer ${token}`
@@ -422,6 +499,7 @@ function Wardrobe() {
     setEditColor(item.color || "");
     setEditMaterial(item.material || "");
     setEditOccasion(item.occasion || "");
+    setEditStyling(item.styling || "");
   };
 
   const handleEditCancel = () => {
@@ -430,6 +508,7 @@ function Wardrobe() {
     setEditColor("");
     setEditMaterial("");
     setEditOccasion("");
+    setEditStyling("");
   };
 
   const handleEditSave = async (id) => {
@@ -437,12 +516,13 @@ function Wardrobe() {
 
     try {
       await axios.put(
-        `http://localhost:5001/api/wardrobe/${id}`,
+        `${API_URL}/api/wardrobe/${id}`,
         {
           category: editCategory,
           color: editColor,
           material: editMaterial,
-          occasion: editOccasion
+          occasion: editOccasion,
+          styling: editStyling
         },
         {
           headers: {
@@ -482,7 +562,7 @@ function Wardrobe() {
 
     try {
       await axios.put(
-        `http://localhost:5001/api/wardrobe/${item._id}`,
+        `${API_URL}/api/wardrobe/${item._id}`,
         {
           favorite: !item.favorite
         },
@@ -546,10 +626,19 @@ function Wardrobe() {
     ["Pant", "Pant", "unisex"],
     ["Shorts", "Shorts", "unisex"],
     ["Jacket", "Jacket", "unisex"],
+    ["Coat", "Coat", "unisex"],
     ["Bag", "Bag", "unisex"],
     ["Watch", "Watch", "unisex"],
     ["Belt", "Belt", "unisex"],
     ["Jewelry", "Jewelry", "unisex"],
+    ["Denims", "Denims", "unisex"],
+    ["Footwear", "Footwear", "unisex"],
+    ["Boots", "Boots", "unisex"],
+    ["Earrings", "Earrings", "unisex"],
+    ["Neck Chain", "Neck Chain", "unisex"],
+    ["Finger Ring", "Finger Ring", "unisex"],
+    ["Hand Cuff", "Hand Cuff", "unisex"],
+    ["Head Accessory", "Head Accessory", "unisex"],
     // ---- men's ----
     ["Kurta (Men)", "Kurta (Men)", "men"],
     ["Sherwani", "Sherwani", "men"],
@@ -583,7 +672,49 @@ function Wardrobe() {
     "Bag",
     "Watch",
     "Belt",
-    "Jewelry"
+    "Jewelry",
+    "Footwear",
+    "Boots",
+    "Earrings",
+    "Neck Chain",
+    "Finger Ring",
+    "Hand Cuff",
+    "Head Accessory"
+    // NOTE: "Denims" is deliberately NOT in this list - it's a
+    // bottom-wear clothing item (like Jean/Pant), not an accessory,
+    // so it doesn't get the Material input and DOES get real
+    // occasion filtering (see outfit_recommendation.CATEGORY_
+    // OCCASION_AFFINITY's "denim"/"denims" entry) instead of the
+    // "suitable for every occasion" default every category in this
+    // list gets.
+  ];
+
+  // Real garments (not accessories) where the fabric still matters
+  // for WEATHER matching specifically - a wool Coat/Jacket should
+  // get the same "this is genuinely warm" credit as one photographed
+  // clearly enough to look like a heavy winter piece. See
+  // backend.outfit_recommendation._has_warm_material /
+  // WARM_MATERIAL_MARKERS, which is what actually reads this value
+  // ("wool", "fleece", "fur", ...) when scoring an outfit for cold
+  // weather - this list only controls whether the Material input is
+  // shown for these categories, it doesn't affect occasion tagging
+  // the way ACCESSORY_CATEGORIES does.
+  const MATERIAL_CATEGORIES = [
+    "Coat",
+    "Jacket"
+  ];
+
+  // Categories where the AI's category guess ("saree", "lehenga",
+  // "kurta") tells you the garment TYPE but not how formal a
+  // specific one is - a plain cotton saree and a heavily worked
+  // wedding saree both just say "saree". This manual override lets
+  // the user say which one THIS item is, so outfit scoring
+  // (backend.style_compatibility.resolve_style) can tell them apart.
+  const STYLING_CATEGORIES = [
+    "Saree",
+    "Lehenga",
+    "Kurta (Men)",
+    "Kurta (Women)"
   ];
 
   // =========================================================
@@ -646,6 +777,52 @@ function Wardrobe() {
 
         <div className="side-panel">
 
+          {/* AI CATEGORY SUGGESTION
+              Only ever appears when the AI disagreed with the chosen
+              category in a way it is not qualified to settle by
+              itself. The item is already saved as the user named it,
+              so the wording offers rather than warns. */}
+          {pendingSuggestion && (
+            <div
+              style={{
+                border: "1px solid #d8c3b0",
+                background: "#fdf7f1",
+                borderRadius: "8px",
+                padding: "12px",
+                marginBottom: "16px",
+              }}
+            >
+              <p style={{ margin: "0 0 6px", fontSize: "13px", color: "#6b4f3a" }}>
+                Saved as <strong>{pendingSuggestion.savedCategory}</strong>.
+              </p>
+
+              <p style={{ margin: "0 0 10px", fontSize: "13px", color: "#8a7a6d" }}>
+                The AI thought this looked more like{" "}
+                <strong>{pendingSuggestion.suggestedCategory}</strong>
+                {pendingSuggestion.confidence
+                  ? ` (${Math.round(pendingSuggestion.confidence * 100)}% sure)`
+                  : ""}
+                . It was trained mainly on Indian ethnic wear, so it can be
+                wrong about other clothes - your choice was kept.
+              </p>
+
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={acceptSuggestion}
+                style={{ marginRight: "8px" }}
+              >
+                Change to {pendingSuggestion.suggestedCategory}
+              </button>
+
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => setPendingSuggestion(null)}
+              >
+                Keep {pendingSuggestion.savedCategory}
+              </button>
+            </div>
+          )}
+
           <h3>Add New Item</h3>
 
           <form onSubmit={handleUpload}>
@@ -654,9 +831,10 @@ function Wardrobe() {
 
             <select
               value={category}
-              onChange={(e) =>
-                setCategory(e.target.value)
-              }
+              onChange={(e) => {
+                setCategory(e.target.value);
+                setCategoryChosen(true);
+              }}
             >
 
               {categories.map(
@@ -679,28 +857,57 @@ function Wardrobe() {
                 ever want to force a specific occasion on top of
                 that. */}
 
-            {/* OPTIONAL MANUAL COLOR */}
+            {/* OPTIONAL MANUAL COLOR - leave blank and the backend
+                auto-detects it from the photo itself (see
+                backend.color_detection.detect_dominant_color). */}
 
             <input
-              placeholder="Color"
+              placeholder="Color (leave blank to auto-detect)"
               value={color}
               onChange={(e) =>
                 setColor(e.target.value)
               }
             />
 
-            {/* MATERIAL (accessories only) */}
+            {/* MATERIAL (accessories, plus Coat/Jacket where the
+                fabric matters for weather matching - see
+                MATERIAL_CATEGORIES above) */}
 
-            {ACCESSORY_CATEGORIES.includes(
-              category
-            ) && (
+            {(ACCESSORY_CATEGORIES.includes(category) ||
+              MATERIAL_CATEGORIES.includes(category)) && (
               <input
-                placeholder="Material (e.g. leather, gold, metal)"
+                placeholder="Material (e.g. leather, gold, metal, wool)"
                 value={material}
                 onChange={(e) =>
                   setMaterial(e.target.value)
                 }
               />
+            )}
+
+            {/* OPTIONAL STYLING (Casual vs Wedding/Festive) - only
+                shown for Saree/Lehenga/Kurta-type items, where the
+                AI's category guess alone can't tell how formal this
+                specific piece is. */}
+
+            {STYLING_CATEGORIES.includes(
+              category
+            ) && (
+              <select
+                value={styling}
+                onChange={(e) =>
+                  setStyling(e.target.value)
+                }
+              >
+                <option value="">
+                  Styling (optional)
+                </option>
+                <option value="Casual">
+                  Casual
+                </option>
+                <option value="Wedding/Festive">
+                  Wedding/Festive
+                </option>
+              </select>
             )}
 
             {/* IMAGE */}
@@ -986,7 +1193,7 @@ function Wardrobe() {
                   {item.image_path ? (
 
                     <img
-                      src={`http://localhost:5001${item.image_path}`}
+                      src={assetUrl(item.image_path)}
                       alt={item.category}
                     />
 
@@ -1069,9 +1276,8 @@ function Wardrobe() {
                         }
                       />
 
-                      {ACCESSORY_CATEGORIES.includes(
-                        editCategory
-                      ) && (
+                      {(ACCESSORY_CATEGORIES.includes(editCategory) ||
+                        MATERIAL_CATEGORIES.includes(editCategory)) && (
                         <input
                           placeholder="Material"
                           value={editMaterial}
@@ -1081,6 +1287,29 @@ function Wardrobe() {
                             )
                           }
                         />
+                      )}
+
+                      {STYLING_CATEGORIES.includes(
+                        editCategory
+                      ) && (
+                        <select
+                          value={editStyling}
+                          onChange={(e) =>
+                            setEditStyling(
+                              e.target.value
+                            )
+                          }
+                        >
+                          <option value="">
+                            Styling (optional)
+                          </option>
+                          <option value="Casual">
+                            Casual
+                          </option>
+                          <option value="Wedding/Festive">
+                            Wedding/Festive
+                          </option>
+                        </select>
                       )}
 
                       <div className="item-actions">
@@ -1133,6 +1362,12 @@ function Wardrobe() {
                       {item.material && (
                         <p className="item-meta">
                           {item.material}
+                        </p>
+                      )}
+
+                      {item.styling && (
+                        <p className="item-meta">
+                          Styling: {item.styling}
                         </p>
                       )}
 

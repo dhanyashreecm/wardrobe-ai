@@ -22,6 +22,16 @@ def save_trip(user_email, trip_plan):
     return str(result.inserted_id)
 
 
+def delete_all_for_user(user_email):
+    """
+    Deletes every saved trip belonging to this account. Used only by
+    the "delete account" flow (see app.py's /api/user/account DELETE
+    route) - same reasoning as wardrobe.delete_all_for_user().
+    """
+    result = trips_collection.delete_many({"user_email": user_email})
+    return result.deleted_count
+
+
 def get_user_trips(user_email):
 
     trips = list(

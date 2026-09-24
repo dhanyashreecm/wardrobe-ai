@@ -3,6 +3,7 @@ from collections import defaultdict
 
 from backend.category_gender import is_allowed_for_account
 from backend.color_theory import outfit_color_score
+from backend.occasion_model import occasion_fit
 from backend.style_compatibility import outfit_style_score
 
 
@@ -100,12 +101,16 @@ CATEGORY_OCCASION_AFFINITY = {
     "trousers": {"casual", "day_outing", "college", "office", "interview", "date"},
     "jean": {"casual", "day_outing", "college", "date"},
     "jeans": {"casual", "day_outing", "college", "date"},
+    "denim": {"casual", "day_outing", "college", "date"},
+    "denims": {"casual", "day_outing", "college", "date"},
     "short": {"casual", "day_outing", "college"},
     "shorts": {"casual", "day_outing", "college"},
     "skirt": {"casual", "day_outing", "college", "date", "party"},
     "skirts": {"casual", "day_outing", "college", "date", "party"},
     "jacket": {"office", "interview", "date", "party", "day_outing"},
     "jackets": {"office", "interview", "date", "party", "day_outing"},
+    "coat": {"office", "interview", "date", "party", "day_outing"},
+    "coats": {"office", "interview", "date", "party", "day_outing"},
     "dress": {"casual", "day_outing", "college", "date", "party"},
     "dresses": {"casual", "day_outing", "college", "date", "party"},
     "saree": {"office", "interview", "wedding", "traditional", "party"},
@@ -339,9 +344,9 @@ TOP_MARKERS = {
 
 BOTTOM_MARKERS = {
     "pant", "pants", "trouser", "trousers", "jean", "jeans",
-    "short", "shorts", "skirt", "skirts", "bottom", "bottoms",
-    "legging", "leggings", "palazzo", "palazzos", "dhoti",
-    "salwar", "salwars"
+    "denim", "denims", "short", "shorts", "skirt", "skirts",
+    "bottom", "bottoms", "legging", "leggings", "palazzo",
+    "palazzos", "dhoti", "salwar", "salwars"
 }
 
 DRESS_MARKERS = {
@@ -351,16 +356,28 @@ DRESS_MARKERS = {
 
 ACCESSORY_MARKERS = {
     "shoe", "shoes", "sneaker", "sneakers", "mojari", "mojaris",
+    "footwear", "boot", "boots",
     "bag", "bags", "watch", "watches", "belt", "belts",
     "jewellery", "jewelry", "accessory", "accessories",
-    "dupatta", "dupattas", "petticoat", "petticoats"
+    "dupatta", "dupattas", "petticoat", "petticoats",
+    # ---- newly-added jewelry/accessory categories -------------
+    # Without these, an Earrings/Neck Chain/Finger Ring/Hand Cuff/
+    # Head Accessory item matched NONE of the marker sets below and
+    # was silently dropped from every outfit - never crashing, never
+    # showing an error, just invisible. Same bug that "footwear"/
+    # "boot"/"boots" above and "denim"/"denims" in BOTTOM_MARKERS
+    # just got fixed for.
+    "earring", "earrings", "neck", "chain", "chains",
+    "finger", "ring", "rings", "cuff", "cuffs",
+    "head", "headwear"
 }
 
 # Layering pieces - not a top/bottom/dress on their own, but worth
 # folding in with accessories so they can still be suggested
 # alongside an outfit instead of being silently ignored.
 LAYER_MARKERS = {
-    "jacket", "jackets", "sweater", "sweaters", "nehru"
+    "jacket", "jackets", "sweater", "sweaters", "nehru",
+    "coat", "coats"
     # (sherwani/sherwanis moved to TOP_MARKERS above)
 }
 
@@ -374,41 +391,180 @@ LIGHT_MARKERS = {
 
 WARM_LAYER_MARKERS = {
     "jacket", "jackets", "sweater", "sweaters",
-    "nehru", "sherwani", "sherwanis"
+    "nehru", "sherwani", "sherwanis",
+    "coat", "coats", "boot", "boots"
 }
+
+# The optional "material" field (see app.py's add_wardrobe_item -
+# ACCESSORY_CATEGORIES / MATERIAL_CATEGORIES in Wardrobe.js decide
+# which categories even show that input) is free text, not a
+# controlled vocabulary - this only checks for a WORD match, so
+# "wool", "Wool blend", and "80% wool" all count, but a material
+# typo or a language other than English won't. This is what lets a
+# wool coat/sweater get recognized as cold-weather-appropriate even
+# though "material" itself isn't a clothing category - see
+# WARM_LAYER_MARKERS above for the category-based half of this.
+WARM_MATERIAL_MARKERS = {
+    "wool", "fleece", "thermal", "fur", "down",
+    "flannel", "corduroy", "cashmere"
+}
+
+# Kept in sync with (but decoupled from) backend.weather.
+# HUMID_THRESHOLD_PCT - this module deliberately never imports from
+# backend.weather so it keeps working with ANY weather-shaped dict
+# (a test fixture, a future second provider), not just OpenWeatherMap
+# specifically. If the two ever drift apart, the worst case is one
+# module calling a day "humid" a little earlier/later than the
+# other - never a crash, since both simply skip this note when the
+# key is missing.
+HUMID_THRESHOLD_PCT = 70
+
+
+def _has_warm_material(item):
+    material = (item.get("material") or "").lower()
+    if not material:
+        return False
+    material_tokens = set(re.split(r"[^a-z]+", material))
+    return bool(material_tokens & WARM_MATERIAL_MARKERS)
 
 
 def _weather_score(items, weather):
     """
-    Rough weather-suitability score. Returns a neutral 5 points
-    per item when there's no weather info, or when an item's
-    category doesn't clearly fall into a "light" or "warm layer"
-    bucket - weather should nudge ranking, not hide clothes the
-    heuristic can't classify.
+    Rough weather-suitability score. Returns (points, reasons):
+      - points: a neutral 5 points per item when there's no weather
+        info, or when an item's category doesn't clearly fall into a
+        "light" or "warm layer" bucket - weather should nudge
+        ranking, not hide clothes the heuristic can't classify.
+      - reasons: short, de-duplicated, order-preserved plain-English
+        notes about WHY weather favored (or flagged) something in
+        this outfit, used by _build_why() to populate the "why this
+        works" bullets. Always [] when there's no weather info.
+
+    Covers temperature (hot/cold), rain and wind on the pieces
+    actually in the outfit, plus an honest humidity note (humidity
+    doesn't change which pieces get picked - no wardrobe field says
+    how breathable a fabric is - but the spec's "be honest, don't
+    guess" instruction still means a muggy day should say so rather
+    than staying silent about it).
     """
 
     if not weather:
-        return 0
+        return 0, []
 
     points = 0
+    notes = []
+
+    is_hot = weather.get("is_hot")
+    is_cold = weather.get("is_cold")
+    is_rainy = weather.get("is_rainy")
+    is_windy = weather.get("is_windy")
 
     for item in items:
 
         tokens = _tokens(item.get("category"))
+        warm_material = _has_warm_material(item)
 
-        if weather.get("is_hot") and tokens & LIGHT_MARKERS:
+        if is_hot and tokens & LIGHT_MARKERS:
             points += 25
+            notes.append("kept it light for today's heat")
 
-        elif weather.get("is_cold") and tokens & WARM_LAYER_MARKERS:
+        elif is_cold and (tokens & WARM_LAYER_MARKERS):
             points += 25
+            notes.append("adds warmth for today's cold")
 
-        elif weather.get("is_rainy") and tokens & WARM_LAYER_MARKERS:
+        elif is_cold and warm_material:
+            # Category alone didn't mark this as a warm layer (e.g.
+            # a plain "Shirt" or "Kurta"), but the user noted a warm
+            # material on it - still a genuinely good cold-weather
+            # pick, just a slightly smaller nudge than a category
+            # that's unambiguously outerwear.
+            points += 20
+            notes.append("its warm material suits the cold")
+
+        elif is_rainy and (tokens & WARM_LAYER_MARKERS):
             points += 15
+            notes.append("gives some cover from the rain")
 
         else:
             points += 5
 
-    return points / len(items)
+        # Wind is an INDEPENDENT small nudge, not an alternative to
+        # the temperature/rain logic above - a warm layer earns this
+        # on top of its hot/cold/rain points, since it helps with the
+        # wind regardless of why it was already a good pick.
+        if is_windy and (tokens & WARM_LAYER_MARKERS):
+            points += 8
+            notes.append("also helps block today's wind")
+
+    if (
+        weather.get("humidity_pct") is not None
+        and weather["humidity_pct"] >= HUMID_THRESHOLD_PCT
+    ):
+        notes.append(
+            "it's a humid day, so lighter fabrics will feel more comfortable"
+        )
+
+    # Several items can trigger the identical note (e.g. two warm
+    # layers on a cold day) - de-duplicate while keeping first-seen
+    # order, then cap so "why" stays a short, scannable list rather
+    # than repeating itself.
+    seen = set()
+    reasons = []
+    for note in notes:
+        if note not in seen:
+            seen.add(note)
+            reasons.append(note)
+
+    return points / len(items), reasons[:3]
+
+
+# ------------------------------------------------------------
+# ACTIVITY -> CATEGORY AFFINITY (optional, additive - never a hard
+# filter like occasion). Spec section asks for "activity/occasion"
+# awareness; unlike occasion, an unmatched or unspecified activity
+# never hides anything - it's a small ranking nudge on top of
+# already-valid, already-occasion-filtered outfits, using only
+# categories that actually exist in this app's wardrobe (see
+# ALL_CATEGORIES in Wardrobe.js) rather than invented ones.
+# ------------------------------------------------------------
+
+CANONICAL_ACTIVITIES = ["sports", "outdoor", "formal_event", "travel"]
+
+ACTIVITY_CATEGORY_AFFINITY = {
+    "sports": {"tshirt", "shorts", "footwear"},
+    "outdoor": {"jacket", "coat", "boots", "pant", "trouser", "trousers"},
+    "formal_event": {"saree", "sarees", "lehenga", "lehengas", "gown", "gowns", "sherwani", "sherwanis", "kurta", "kurtas"},
+    "travel": {"tshirt", "shirt", "pant", "jean", "jeans", "denim", "denims", "jacket", "footwear"},
+}
+
+
+def _activity_bonus(items, activity):
+    """
+    Small, additive bonus (never a filter) when an outfit's pieces
+    line up with the stated activity. Returns (points, reason) -
+    reason is None when there's no activity, or when nothing in the
+    outfit happens to match it (an unmatched activity is silently
+    neutral, not penalized - the wardrobe may just not have a
+    dedicated piece for it).
+    """
+    if not activity:
+        return 0, None
+
+    affinity = ACTIVITY_CATEGORY_AFFINITY.get(activity)
+    if not affinity:
+        return 0, None
+
+    matches = 0
+    for item in items:
+        tokens = _tokens(item.get("category"))
+        if tokens & affinity:
+            matches += 1
+
+    if not matches:
+        return 0, None
+
+    label = activity.replace("_", " ")
+    return min(matches * 6, 12), f"also fits well for {label}"
 
 
 # ------------------------------------------------------------
@@ -453,7 +609,7 @@ def _occasion_color_bonus(occasion, color_reasons):
     return 0
 
 
-def _score_outfit(items, occasion, weather=None):
+def _score_outfit(items, occasion, weather=None, activity=None):
     """
     Suitability score for one outfit, combining several INDEPENDENT
     factors rather than one flat heuristic:
@@ -471,14 +627,33 @@ def _score_outfit(items, occasion, weather=None):
         pieces (see backend.style_compatibility) - a Blazer next to
         Gym Shorts scores lower here even though both might pass
         occasion filtering on their own.
-      - weather_points: unchanged from before.
+      - weather_points: temperature/rain/wind/humidity awareness -
+        see _weather_score above. Zero (and no reasons) when
+        `weather` is None, so requests without weather behave exactly
+        as before this was added.
+      - activity_points: optional, additive activity-fit nudge - see
+        _activity_bonus above. Zero (and no reason) when `activity`
+        is None/unrecognized/unmatched.
+      - occasion_points: how well this outfit suits THIS occasion
+        specifically - see backend.occasion_model, which scores each
+        garment against usage statistics measured from 44,446 real
+        catalogue items plus a formality target per occasion.
+
+        This is the term that makes the ranking actually depend on
+        the occasion. Without it (the behaviour before it existed)
+        every factor above was occasion-independent apart from a
+        3-point colour nudge, so any two occasions whose eligible
+        items overlapped returned an identical list in an identical
+        order - measurably so: casual, day_outing, college and date
+        all returned the same five outfits, each scoring exactly
+        65.0, on a plain jeans-and-t-shirts wardrobe.
 
     Every item here has already passed _filter_by_occasion AND
     _filter_by_gender, so all of them are already valid for this
     request - this scoring step only RANKS valid combinations
-    against each other; a high color or style score can never
-    rescue an outfit that failed a hard restriction; it can only
-    rank one valid outfit above another valid one.
+    against each other; a high color, style, weather or activity
+    score can never rescue an outfit that failed a hard restriction;
+    it can only rank one valid outfit above another valid one.
     """
 
     flagged = _is_flagged(items, occasion)
@@ -490,23 +665,32 @@ def _score_outfit(items, occasion, weather=None):
 
     style_points, style_reasons = outfit_style_score(items)
 
-    weather_points = _weather_score(
-        items,
-        weather
-    )
+    weather_points, weather_reasons = _weather_score(items, weather)
+
+    activity_points, activity_reason = _activity_bonus(items, activity)
+    activity_reasons = [activity_reason] if activity_reason else []
+
+    occasion_points, occasion_reasons = occasion_fit(items, occasion)
 
     return {
         "score": round(
-            fit_points + color_points + style_points + weather_points,
+            fit_points + color_points + style_points
+            + weather_points + activity_points + occasion_points,
             1
         ),
         "flagged": flagged,
         "color_reasons": color_reasons,
         "style_reasons": style_reasons,
+        "weather_reasons": weather_reasons,
+        "activity_reasons": activity_reasons,
+        "occasion_reasons": occasion_reasons,
     }
 
 
-def _build_why(occasion, flagged, color_reasons, style_reasons):
+def _build_why(
+    occasion, flagged, color_reasons, style_reasons,
+    weather_reasons=None, activity_reasons=None, occasion_reasons=None
+):
     """
     Short, human-readable "why this works" bullets (spec section 10)
     - built directly from the same reasons already computed for
@@ -515,6 +699,11 @@ def _build_why(occasion, flagged, color_reasons, style_reasons):
     combination - "flagged" only means at least one piece is an
     occasion stretch), it's just honest about that instead of
     pretending every piece is a perfect fit.
+
+    `weather_reasons`/`activity_reasons` default to None so every
+    existing call site (and every existing test) that doesn't pass
+    them keeps working unchanged - they just produce no extra
+    bullets, exactly like before weather/activity awareness existed.
     """
     label = occasion.replace("_", " ")
     bullets = []
@@ -533,6 +722,18 @@ def _build_why(occasion, flagged, color_reasons, style_reasons):
     for reason in style_reasons:
         if "no style pairing" not in reason:
             bullets.append(f"Style: {reason}.")
+
+    for reason in (weather_reasons or []):
+        bullets.append(f"Weather: {reason}.")
+
+    for reason in (activity_reasons or []):
+        bullets.append(f"Activity: {reason}.")
+
+    # Placed last deliberately: these say how well the outfit suits
+    # the occasion as a WHOLE (see backend.occasion_model), which
+    # reads as a summing-up after the per-factor bullets above.
+    for reason in (occasion_reasons or []):
+        bullets.append(f"Occasion: {reason}.")
 
     return bullets
 
@@ -558,7 +759,78 @@ def _filter_by_gender(wardrobe_items, account_gender):
     ]
 
 
-def recommend_outfits(wardrobe_items, occasion="casual", weather=None, account_gender=None):
+def _outfit_item_ids(outfit):
+    """
+    The _id of every wardrobe item in an outfit (top, bottom, dress,
+    accessory - whichever are present). Used only by _diversify()
+    below to track which physical items have already been used.
+    Items with no _id (shouldn't normally happen for real wardrobe
+    data) are simply skipped rather than crashing.
+    """
+    return [
+        item.get("_id")
+        for item in outfit["items"]
+        if item.get("_id")
+    ]
+
+
+def _diversify(candidates, limit):
+    """
+    Greedily selects up to `limit` outfits out of `candidates`
+    (already scored by _score_outfit), spreading which actual
+    wardrobe items get used instead of just taking the top N by raw
+    score.
+
+    Without this, a single top that happens to pair well (by color/
+    style) with several different bottoms can dominate the entire
+    top-N list - e.g. the same white shirt showing up in 6 of the 10
+    recommendations, or the trip planner putting a user in the same
+    top three days in a row, even though the wardrobe has other
+    perfectly good tops sitting unused. That's the actual complaint
+    this fixes: recommendations (and, via trip_planner.py asking for
+    a bigger `limit`, a trip's day-by-day plan) shouldn't repeat the
+    same piece over and over while better variety is available.
+
+    How it works: at each step, pick the remaining outfit whose
+    items have been used the LEAST so far (ties broken by score, so
+    quality still decides which outfit wins when variety is equal).
+    Every item starts at zero uses, so the very first picks are
+    still simply the best-scored outfits - this only changes the
+    ORDER once an item would otherwise be reused, never rejects a
+    genuinely good outfit outright, and never fabricates variety a
+    small wardrobe doesn't actually have (a wardrobe with only one
+    top will still recommend that top every time - there's nothing
+    else to rotate in).
+    """
+    remaining = list(candidates)
+    selected = []
+    usage_count = defaultdict(int)
+
+    while remaining and len(selected) < limit:
+
+        remaining.sort(
+            key=lambda outfit: (
+                sum(
+                    usage_count[item_id]
+                    for item_id in _outfit_item_ids(outfit)
+                ),
+                -outfit["score"],
+            )
+        )
+
+        chosen = remaining.pop(0)
+        selected.append(chosen)
+
+        for item_id in _outfit_item_ids(chosen):
+            usage_count[item_id] += 1
+
+    return selected
+
+
+def recommend_outfits(
+    wardrobe_items, occasion="casual", weather=None,
+    account_gender=None, limit=10, activity=None
+):
     """
     Generate ranked complete outfit recommendations
     from the user's wardrobe.
@@ -569,7 +841,10 @@ def recommend_outfits(wardrobe_items, occasion="casual", weather=None, account_g
     backend.weather.get_weather() and nudges ranking toward
     weather-appropriate pieces. `account_gender` ("Male"/"Female"),
     when provided, is a defense-in-depth filter - see
-    _filter_by_gender() above.
+    _filter_by_gender() above. `activity` (see CANONICAL_ACTIVITIES),
+    when provided and recognized, is an additional, purely additive
+    ranking nudge - see _activity_bonus() above; it never filters
+    anything out the way `occasion` does.
 
     Occasion filtering is strict: asking for "party" only builds
     outfits from items whose CATEGORY is actually a fit for party
@@ -577,6 +852,15 @@ def recommend_outfits(wardrobe_items, occasion="casual", weather=None, account_g
     tagged party - a pair of gym shorts never sneaks into a party
     recommendation just because the wardrobe happens to be short on
     party wear.
+
+    `limit` caps how many outfits come back, and results are
+    DIVERSIFIED (see _diversify above) rather than just being the
+    raw top-`limit` by score - this is what keeps the same top/
+    bottom from dominating the list when it happens to score well
+    against several different partners. trip_planner.py passes a
+    bigger `limit` than the default 10 for longer trips, so a
+    two-week trip gets more distinct outfits to draw from before it
+    has to repeat any of them.
     """
 
     if not wardrobe_items:
@@ -657,7 +941,7 @@ def recommend_outfits(wardrobe_items, occasion="casual", weather=None, account_g
                 ]
             )
 
-        outcome = _score_outfit(items, occasion, weather)
+        outcome = _score_outfit(items, occasion, weather, activity)
 
         recommendations.append({
             "occasion": occasion,
@@ -667,9 +951,14 @@ def recommend_outfits(wardrobe_items, occasion="casual", weather=None, account_g
             "flagged": outcome["flagged"],
             "color_reasons": outcome["color_reasons"],
             "style_reasons": outcome["style_reasons"],
+            "weather_reasons": outcome["weather_reasons"],
+            "activity_reasons": outcome["activity_reasons"],
+            "occasion_reasons": outcome["occasion_reasons"],
             "why": _build_why(
                 occasion, outcome["flagged"],
-                outcome["color_reasons"], outcome["style_reasons"]
+                outcome["color_reasons"], outcome["style_reasons"],
+                outcome["weather_reasons"], outcome["activity_reasons"],
+                outcome["occasion_reasons"]
             )
         })
 
@@ -693,7 +982,7 @@ def recommend_outfits(wardrobe_items, occasion="casual", weather=None, account_g
                     ]
                 )
 
-            outcome = _score_outfit(items, occasion, weather)
+            outcome = _score_outfit(items, occasion, weather, activity)
 
             recommendations.append({
                 "occasion": occasion,
@@ -703,26 +992,27 @@ def recommend_outfits(wardrobe_items, occasion="casual", weather=None, account_g
                 "flagged": outcome["flagged"],
                 "color_reasons": outcome["color_reasons"],
                 "style_reasons": outcome["style_reasons"],
+                "weather_reasons": outcome["weather_reasons"],
+                "activity_reasons": outcome["activity_reasons"],
+                "occasion_reasons": outcome["occasion_reasons"],
                 "why": _build_why(
                     occasion, outcome["flagged"],
-                    outcome["color_reasons"], outcome["style_reasons"]
+                    outcome["color_reasons"], outcome["style_reasons"],
+                    outcome["weather_reasons"], outcome["activity_reasons"],
+                    outcome["occasion_reasons"]
                 )
             })
 
 
     # ========================================================
-    # RANK BY SCORE, THEN LIMIT RESULTS
+    # DIVERSIFY, THEN LIMIT RESULTS
     #
-    # Best occasion/color matches surface first instead of
-    # whatever order items happened to be grouped in.
+    # Best occasion/color/style matches still surface first (see
+    # _diversify's tie-breaking), but without letting one item
+    # dominate every slot in the list - see _diversify's docstring.
     # ========================================================
 
-    recommendations.sort(
-        key=lambda outfit: outfit["score"],
-        reverse=True
-    )
-
-    return recommendations[:10]
+    return _diversify(recommendations, limit=limit)
 
 
 def describe_missing_pieces(wardrobe_items, occasion="casual", account_gender=None):
