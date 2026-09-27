@@ -104,6 +104,16 @@ def file_sha256(path):
     return digest.hexdigest()
 
 
+# Names too generic to identify a photo on their own.
+GENERIC_NAMES = {"image.jpg", "image.jpeg", "image.png", "item.jpg", "photo.jpg", "blob", "upload.jpg"}
+
+
+def photo_name(path_or_url):
+    """Original file name of a local image path, lower-cased ('' if generic)."""
+    name = os.path.basename(str(path_or_url or "")).strip().lower()
+    return "" if name in GENERIC_NAMES else name
+
+
 def new_report():
     return {
         "users_migrated": 0,
@@ -176,17 +186,23 @@ def migrate_collection(
 
     # Photos already in each owner's cloud wardrobe, for the
     # duplicate-photo check. Loaded lazily per owner.
+    #
+    # Items copied by the OLDER migration script carry no fingerprint,
+    # only their original file name (original_filename, or the legacy
+    # local_image_path) - so the same photo is also recognised by name.
     known_hashes = {}
+    known_names = {}
 
     def hashes_for(owner):
         if owner not in known_hashes:
-            known_hashes[owner] = {
-                row.get("image_sha256")
-                for row in destination.find(
-                    {"user_email": owner, "image_sha256": {"$exists": True}},
-                    {"image_sha256": 1},
-                )
-            }
+            known_hashes[owner] = set()
+            known_names[owner] = set()
+            for row in destination.find({"user_email": owner}):
+                if row.get("image_sha256"):
+                    known_hashes[owner].add(row["image_sha256"])
+                name = photo_name(row.get("original_filename") or row.get("local_image_path"))
+                if name:
+                    known_names[owner].add(name)
         return known_hashes[owner]
 
     for row in source_rows:
@@ -230,14 +246,18 @@ def migrate_collection(
 
                 photo_hash = file_sha256(source_path)
                 document["image_sha256"] = photo_hash
+                document["original_filename"] = os.path.basename(source_path)
+                name_key = photo_name(source_path)
 
-                if photo_hash in hashes_for(owner):
+                if photo_hash in hashes_for(owner) or (name_key and name_key in known_names[owner]):
                     report[f"{name}_duplicate_photo"] += 1
                     continue
 
                 if dry_run:
                     report["images_to_upload"] += 1
                     hashes_for(owner).add(photo_hash)
+                    if name_key:
+                        known_names[owner].add(name_key)
                     report[f"{name}_migrated"] += 1
                     continue
 
@@ -262,6 +282,8 @@ def migrate_collection(
                     continue
 
                 hashes_for(owner).add(photo_hash)
+                if name_key:
+                    known_names[owner].add(name_key)
 
         if not dry_run:
             try:
@@ -309,14 +331,16 @@ def verify_owner(destination_db, email, check_urls=True):
     lines.append(f"Wardrobe items               : {len(items)}")
     lines.append(f"  of which migrated          : {len(migrated)}")
     lines.append(f"  with https cloud image URL : {len(remote)}")
+    legacy = [i for i in items if i.get("local_image_path")]
     lines.append(f"  with a LOCAL image path    : {len(local)}")
+    lines.append(f"  with a leftover local_image_path field: {len(legacy)}")
     lines.append(f"  duplicate migrations       : {len(origin_ids) - len(set(origin_ids))}")
     lines.append(f"  duplicate photos           : {len(hashes) - len(set(hashes))}")
     lines.append(f"  missing category           : {sum(1 for i in items if not i.get('category'))}")
     lines.append(f"Items under a mis-cased email: {stray}")
     lines.append(f"Trips                        : {destination_db['trips'].count_documents({'user_email': owner})}")
 
-    if local or stray or len(origin_ids) != len(set(origin_ids)):
+    if local or legacy or stray or len(origin_ids) != len(set(origin_ids)):
         ok = False
 
     if check_urls and remote:

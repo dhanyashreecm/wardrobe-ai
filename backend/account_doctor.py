@@ -68,6 +68,9 @@ def describe(db, email):
 
     items = list(db["wardrobe"].find(email_match_filter(canonical, "user_email"), {"image_path": 1, "category": 1}))
     https = sum(1 for i in items if str(i.get("image_path", "")).startswith("https://"))
+    leftover = db["wardrobe"].count_documents({"$and": [email_match_filter(canonical, "user_email"), {"local_image_path": {"$exists": True}}]})
+    if leftover:
+        print(f"   leftover local_image_path fields: {leftover} (removed by --fix)")
     print(f"   images: {https} cloud (https), {len(items) - https} local/other; "
           f"{sum(1 for i in items if not i.get('category'))} without category")
     return accounts
@@ -99,6 +102,28 @@ def fix(db):
             if result.modified_count:
                 print(f"  re-filed {result.modified_count} {name} record(s) onto {canonical}")
                 changed += result.modified_count
+
+    # Items copied by the older migration script kept their laptop path
+    # ("/api/uploads/<folder>/<file>") in a local_image_path field. The
+    # item's real image is already its https Cloudinary URL; the path is
+    # meaningless on any other computer, so only the FILE NAME is kept
+    # (original_filename - used to recognise the same photo if it is
+    # ever migrated again) and the local path is removed.
+    import os
+    legacy = list(db["wardrobe"].find({"local_image_path": {"$exists": True}},
+                                      {"local_image_path": 1, "original_filename": 1, "image_path": 1}))
+    cleaned = 0
+    for item in legacy:
+        if not str(item.get("image_path", "")).startswith("https://"):
+            continue  # its image is not in the cloud yet - leave it for a re-migration
+        update = {"$unset": {"local_image_path": ""}}
+        if not item.get("original_filename"):
+            update["$set"] = {"original_filename": os.path.basename(str(item.get("local_image_path") or ""))}
+        db["wardrobe"].update_one({"_id": item["_id"]}, update)
+        cleaned += 1
+    if cleaned:
+        print(f"  removed leftover local paths from {cleaned} cloud item(s) (file name kept)")
+        changed += cleaned
 
     from backend.db import ensure_indexes
     problems = ensure_indexes()

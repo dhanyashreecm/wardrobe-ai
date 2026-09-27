@@ -230,6 +230,17 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(self.uploads, [])
         self.assertEqual(report["images_to_upload"], 5)
 
+    def test_photo_already_migrated_by_older_script_is_not_duplicated(self):
+        # An item the OLD script copied: no fingerprint, only its laptop path.
+        self.dest["wardrobe"].insert_one({
+            "_id": "old1", "user_email": "ganga@gmail.com", "migrated_from_id": "elsewhere1",
+            "image_path": "https://res.cloudinary.com/demo/old.jpg",
+            "local_image_path": "/api/uploads/ganga_digital_wardrobe/p2.jpg"})
+        report = self.run_once()
+        self.assertEqual(report["wardrobe_duplicate_photo"], 2)  # p2 by name, p0 twice by hash
+        self.assertEqual(len(self.dest["wardrobe"].docs), 5)     # old1 + p0,p1,p3,p4
+        self.assertTrue(all(d.get("original_filename") for d in self.dest["wardrobe"].docs if d["_id"] != "old1"))
+
     def test_stable_cloudinary_ids(self):
         self.run_once()
         self.assertEqual(sorted(self.uploads), sorted(f"migrated_local{i}" for i in range(5)))
