@@ -1,4 +1,4 @@
-from backend.outfit_recommendation import recommend_outfits, effective_occasions, describe_missing_pieces
+from backend.outfit_recommendation import recommend_outfits, effective_occasions, describe_missing_pieces, resolve_occasion_query
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from flask_jwt_extended import (
@@ -7,6 +7,7 @@ from flask_jwt_extended import (
     jwt_required,
     get_jwt_identity
 )
+from backend import email_service
 from backend.auth import (
     register_user,
     verify_login,
@@ -16,6 +17,9 @@ from backend.auth import (
     update_user_profile,
     set_profile_picture,
     delete_user_account,
+    create_password_reset_code,
+    reset_password_with_code,
+    RESET_CODE_MINUTES,
 )
 from backend.wardrobe import (
     add_item,
@@ -32,11 +36,21 @@ from backend.indofashion_classifier import predict_category
 from backend.weather import get_weather, get_weather_forecast
 from backend.trip_planner import plan_trip
 from backend.trips import save_trip, get_user_trips, delete_all_for_user as delete_all_trips_for_user
-from backend.color_detection import detect_dominant_color
+from backend.color_detection import detect_dominant_color, detect_colors
+from backend.item_attributes import describe_item
 from backend import config, storage
-from backend.db import ping as ping_database
+from backend.db import ping as ping_database, ensure_indexes
+from backend.identity import normalize_email
+from backend import outfit_feedback
+from backend import garment_classifier
+from backend import recommend_service
+from backend import outfit_presentation
+from backend import item_recommender
 
 import os
+import uuid
+import traceback
+from datetime import timedelta
 import shutil
 from werkzeug.utils import secure_filename
 
@@ -57,7 +71,46 @@ CORS(app)
 # refuses to start the app if it is missing, so this is never blank.
 app.config["JWT_SECRET_KEY"] = config.JWT_SECRET_KEY
 
+# A browser <img src="..."> cannot send an Authorization header, so a
+# wardrobe image served from this machine's disk could not be
+# protected by the header alone - which is why that route was open to
+# anyone. Accepting the token from ?token= as well lets the image
+# route check ownership like every other route. Headers stay first,
+# so nothing else changes.
+app.config["JWT_TOKEN_LOCATION"] = ["headers", "query_string"]
+app.config["JWT_QUERY_STRING_NAME"] = "token"
+
+# Login tokens used to expire after flask-jwt-extended's DEFAULT of 15
+# minutes (nothing set it), so any upload or edit made more than 15
+# minutes after logging in failed with a bare {"msg": "Token has
+# expired"} - which the frontend could only show as "Upload failed.".
+# Now configurable, 7 days by default (JWT_ACCESS_TOKEN_EXPIRES_SECONDS).
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(
+    seconds=int(os.environ.get("JWT_ACCESS_TOKEN_EXPIRES_SECONDS", 7 * 24 * 3600))
+)
+
 jwt = JWTManager(app)
+
+
+# Every auth failure answers in the same {"success", "message", "code"}
+# shape as the rest of the API, so the frontend can say what happened
+# ("your session expired") instead of a generic failure.
+@jwt.expired_token_loader
+def _expired_token(jwt_header, jwt_payload):
+    return jsonify({"success": False, "code": "token_expired",
+                    "message": "Your session has expired - please log in again."}), 401
+
+
+@jwt.invalid_token_loader
+def _invalid_token(reason):
+    return jsonify({"success": False, "code": "token_invalid",
+                    "message": "Your login is no longer valid - please log in again."}), 401
+
+
+@jwt.unauthorized_loader
+def _missing_token(reason):
+    return jsonify({"success": False, "code": "token_missing",
+                    "message": "Please log in first."}), 401
 
 
 # One honest summary at startup of what this process is actually
@@ -132,6 +185,18 @@ ETHNIC_AUTO_CATEGORIES = {
 
 ETHNIC_DETECTION_CONFIDENCE_THRESHOLD = 0.5
 
+# Labels the IndoFashion model gives WESTERN clothes it was never
+# trained on (bootcut/skinny jeans -> leggings_and_salwars, crop top ->
+# blouse, skirt -> petticoat). A photo of real leggings and a photo of
+# jeans look alike to it, so these are never applied automatically -
+# only offered as a suggestion the user can accept. The user's own
+# category is kept.
+UNRELIABLE_AUTO_LABELS = {"leggings_and_salwars", "blouse", "petticoats"}
+
+# Below this, the garment classifier's best guess is still saved but
+# the runner-up is offered to the user as a one-click correction.
+GARMENT_CONFIDENCE_THRESHOLD = 0.45
+
 
 # =========================================================
 # UPLOAD FOLDER
@@ -174,6 +239,9 @@ def get_user_folder(user_email):
 # and never any key, password or token. See config.safe_mongo_host().
 # =========================================================
 
+INDEX_PROBLEMS = None
+
+
 @app.route("/api/health", methods=["GET"])
 def health():
 
@@ -200,11 +268,28 @@ def health():
         "weather": {
             "configured": bool(config.OPENWEATHER_API_KEY),
         },
+        # Problems creating the uniqueness indexes (None = not checked
+        # yet in this process, [] = all in place). Never contains data.
+        "indexes": INDEX_PROBLEMS,
     }
 
     # 503 when the database is unreachable so uptime checks and
     # scripts can rely on the status code alone, not just the body.
     return jsonify(payload), (200 if database_ok else 503)
+
+
+# =========================================================
+# WHO IS CALLING
+#
+# The login token's identity is the account's canonical (normalised)
+# email - see verify_login(). Normalising again here also covers
+# tokens issued before normalisation existed (e.g. one minted for
+# "Ganga@Gmail.com"), so a still-valid old token keeps working and
+# still resolves to the ONE account's wardrobe instead of an empty one.
+# =========================================================
+
+def current_user_email():
+    return normalize_email(get_jwt_identity())
 
 
 # =========================================================
@@ -216,8 +301,8 @@ def register():
 
     data = request.json
 
-    name = data.get("name")
-    email = data.get("email")
+    name = (data.get("name") or "").strip()
+    email = normalize_email(data.get("email"))
     password = data.get("password")
     # Gender is MANDATORY now - never trust a value from the client
     # beyond reading it here; register_user() is the actual gate
@@ -238,6 +323,13 @@ def register():
         gender
     )
 
+    # A welcome message, sent on a BACKGROUND thread so the browser
+    # gets its response immediately and a slow or broken mail server
+    # can never turn a successful registration into a failed one.
+    # Silently does nothing when SMTP is not configured.
+    if result["success"] and config.SEND_WELCOME_EMAIL:
+        email_service.send_welcome_email(name, email)
+
     status_code = (
         200
         if result["success"]
@@ -254,10 +346,16 @@ def register():
 @app.route("/api/login", methods=["POST"])
 def login():
 
-    data = request.json
+    data = request.json or {}
 
-    email = data.get("email")
-    password = data.get("password")
+    email = normalize_email(data.get("email"))
+    password = data.get("password") or ""
+
+    if not email or not password:
+        return jsonify({
+            "success": False,
+            "message": "Enter your email and password"
+        }), 400
 
     result = verify_login(
         email,
@@ -266,17 +364,76 @@ def login():
 
     if result["success"]:
 
+        # The ACCOUNT's canonical email, not the string as typed - so
+        # the same account gets the same identity (and so the same
+        # wardrobe) on every device, however the address was typed.
         token = create_access_token(
-            identity=email
+            identity=result["email"]
         )
 
         result["token"] = token
+
+        # "Welcome back" - sent only on a SUCCESSFUL login, and only
+        # to the address stored on the account, so a failed guess at
+        # someone else's email can never trigger mail to them. Same
+        # background thread and same silence-when-unconfigured as
+        # registration above.
+        if config.SEND_LOGIN_EMAIL:
+            email_service.send_signin_email(
+                result.get("name"), result.get("email") or email
+            )
 
         return jsonify(result), 200
 
     else:
 
         return jsonify(result), 401
+
+
+# =========================================================
+# FORGOT PASSWORD
+# =========================================================
+
+@app.route("/api/password/forgot", methods=["POST"])
+def forgot_password():
+    data = request.json or {}
+    email = normalize_email(data.get("email"))
+
+    if not email:
+        return jsonify({"success": False, "message": "Enter your email address"}), 400
+
+    if not config.email_configured():
+        return jsonify({
+            "success": False,
+            "message": "Password reset by email isn't set up on the server yet."
+        }), 503
+
+    result = create_password_reset_code(email)
+    if result["status"] == "ok":
+        email_service.send_password_reset_code(
+            result.get("name"), email, result["code"], RESET_CODE_MINUTES
+        )
+
+    # Same answer whether or not the account exists.
+    return jsonify({
+        "success": True,
+        "message": "If an account exists for this email, a 6-digit code has been sent. "
+                   "Check your inbox (and spam)."
+    }), 200
+
+
+@app.route("/api/password/reset", methods=["POST"])
+def reset_password():
+    data = request.json or {}
+    email = normalize_email(data.get("email"))
+    code = (data.get("code") or "").strip()
+    new_password = data.get("new_password") or ""
+
+    if not email or not code:
+        return jsonify({"success": False, "message": "Email and code are required"}), 400
+
+    result = reset_password_with_code(email, code, new_password)
+    return jsonify(result), (200 if result["success"] else 400)
 
 
 # =========================================================
@@ -296,7 +453,7 @@ def login():
 @jwt_required()
 def migrate_gender():
 
-    user_email = get_jwt_identity()
+    user_email = current_user_email()
 
     data = request.json or {}
 
@@ -317,10 +474,10 @@ def migrate_gender():
 @jwt_required()
 def dashboard():
 
-    current_user_email = get_jwt_identity()
+    caller_email = current_user_email()
 
     return jsonify({
-        "message": f"Welcome, {current_user_email}"
+        "message": f"Welcome, {caller_email}"
     }), 200
 
 
@@ -328,11 +485,82 @@ def dashboard():
 # ADD WARDROBE ITEM
 # =========================================================
 
+@app.route("/api/wardrobe/capabilities", methods=["GET"])
+@jwt_required()
+def wardrobe_capabilities():
+    """
+    Tells the Add Item form what the AI can do on THIS machine, so it
+    never offers "Auto-detect" when the western + ethnic classifier has
+    not been trained yet (the older model only knows Indian ethnic wear).
+    """
+    return jsonify({
+        "success": True,
+        "auto_category": garment_classifier.is_available(),
+        "auto_colour": True,
+        "storage": config.storage_backend(),
+    }), 200
+
+
+ALLOWED_IMAGE_TYPES = {"jpeg", "png", "webp", "gif", "bmp", "mpo"}
+MAX_UPLOAD_BYTES = 15 * 1024 * 1024
+
+
+def validate_upload_image(file_storage):
+    """
+    Returns (ok, message). Checks the upload really is a readable image
+    BEFORE anything is saved or sent to Cloudinary.
+    """
+    from PIL import Image, UnidentifiedImageError
+
+    if file_storage is None:
+        return False, "No image was attached - please choose a photo."
+    data = file_storage.read()
+    file_storage.stream.seek(0)
+    if not data:
+        return False, "The image file is empty - please choose another photo."
+    if len(data) > MAX_UPLOAD_BYTES:
+        return False, "That image is too large (over 15 MB) - please crop it or choose a smaller one."
+    try:
+        import io
+        with Image.open(io.BytesIO(data)) as img:
+            img.verify()
+            fmt = (img.format or "").lower()
+    except (UnidentifiedImageError, OSError, ValueError):
+        return False, "That file isn't an image we can read (use JPG, PNG or WEBP)."
+    if fmt not in ALLOWED_IMAGE_TYPES:
+        return False, f"{fmt.upper() or 'This'} images aren't supported - please use JPG, PNG or WEBP."
+    return True, "ok"
+
+
+def safe_upload_filename(original_name):
+    """
+    Always a non-empty, unique file name. secure_filename() returns ""
+    for names made only of non-Latin characters, which used to make the
+    upload try to save onto the user's FOLDER and crash; two photos both
+    called "image.jpg" also overwrote each other.
+    """
+    name = secure_filename(original_name or "") or "item.jpg"
+    stem, ext = os.path.splitext(name)
+    return f"{uuid.uuid4().hex[:10]}_{stem[:40] or 'item'}{ext.lower() or '.jpg'}"
+
+
 @app.route("/api/wardrobe/add", methods=["POST"])
 @jwt_required()
 def add_wardrobe_item():
+    try:
+        return _add_wardrobe_item()
+    except Exception as error:  # noqa: BLE001 - always answer in JSON
+        print("Upload crashed:\n" + traceback.format_exc())
+        return jsonify({
+            "success": False,
+            "message": "Upload failed: the server hit an error while saving this "
+                       f"item ({type(error).__name__}). Details are in the backend terminal.",
+        }), 500
 
-    user_email = get_jwt_identity()
+
+def _add_wardrobe_item():
+
+    user_email = current_user_email()
 
     # Used below to keep the AI's saree/lehenga auto-detection from
     # overriding a Male account's category - see get_user_gender().
@@ -374,83 +602,20 @@ def add_wardrobe_item():
     # Validate image
     # -----------------------------------------------------
 
-    if not image:
+    ok, problem = validate_upload_image(image)
+    if not ok:
+        return jsonify({"success": False, "message": problem}), 400
 
-        return jsonify({
-            "success": False,
-            "message": "No image provided"
-        }), 400
+    folder_name, folder_path = get_user_folder(user_email)
+    os.makedirs(folder_path, exist_ok=True)
 
-
-    # -----------------------------------------------------
-    # Save image
-    #
-    # The file is written to this machine's disk FIRST, even when
-    # Cloudinary is configured, because the AI steps below
-    # (predict_category, detect_dominant_color) open a filesystem
-    # path, not a URL - keeping a local copy is the smallest possible
-    # change that leaves those modules untouched. The local copy is a
-    # working file, not the permanent home: the permanent home is
-    # whatever storage.save_image() returns.
-    # -----------------------------------------------------
-
-    folder_name, folder_path = get_user_folder(
-        user_email
-    )
-
-    filename = secure_filename(
-        image.filename
-    )
-
-    path = os.path.join(
-        folder_path,
-        filename
-    )
-
+    filename = safe_upload_filename(image.filename)
+    path = os.path.join(folder_path, filename)
     image.save(path)
 
-
-    # -----------------------------------------------------
-    # Permanent image URL
-    #
-    # With Cloudinary configured this is an https URL that loads on
-    # ANY computer - which is what lets the same account see the same
-    # wardrobe from a second laptop. Without it, this falls back to
-    # the original "/api/uploads/..." path served by this machine
-    # (see storage.py), so a single-machine setup still works.
-    #
-    # An upload failure is returned as an error rather than swallowed:
-    # saving a wardrobe row whose image never reached storage would
-    # leave a permanently broken item in the user's wardrobe.
-    # -----------------------------------------------------
-
-    if config.storage_backend() == "cloudinary":
-
-        try:
-            image_url = storage.upload_local_file(
-                path,
-                user_email,
-                kind="wardrobe",
-            )
-
-        except storage.StorageError as error:
-
-            print(f"Image upload failed for {filename}: {error}")
-
-            return jsonify({
-                "success": False,
-                "message":
-                    "Couldn't upload this image to cloud storage. Please "
-                    "check your internet connection and try again."
-            }), 502
-
-    else:
-
-        image_url = (
-            f"/api/uploads/"
-            f"{folder_name}/"
-            f"{filename}"
-        )
+    # The permanent (cloud) upload now happens AFTER category and
+    # colour are settled - previously a photo was pushed to Cloudinary
+    # first and then left there orphaned whenever the item was rejected.
 
 
     # AUTOMATIC CATEGORY DETECTION
@@ -485,7 +650,45 @@ def add_wardrobe_item():
     suggestion_confidence = None
     suggestion_reason = None
 
-    if manual_category not in ACCESSORY_CATEGORIES:
+    # -----------------------------------------------------
+    # NEW: western + ethnic garment classifier (see
+    # garment_classifier.py). Used whenever the user did NOT pick a
+    # category themselves - which is now the default ("Auto-detect").
+    # It knows jeans, t-shirts, tops, dresses... as well as sarees,
+    # lehengas and kurtas, so it replaces the ethnic-only model below.
+    # -----------------------------------------------------
+    user_picked = bool(manual_category) and category_explicitly_chosen
+
+    if not user_picked and garment_classifier.is_available():
+
+        try:
+            prediction = garment_classifier.predict(path, account_gender)
+        except Exception as e:
+            prediction = None
+            print(f"Garment classifier failed for {filename}: {e}")
+
+        if prediction:
+            detected_category = prediction["category"]
+            category_confidence = prediction["confidence"]
+            print(
+                f"Garment classifier: {filename} -> {detected_category} "
+                f"({category_confidence:.2f}); top: {prediction['top']}"
+            )
+            # Not sure? Save the best guess but offer the runner-up
+            # for one-click correction.
+            if (
+                category_confidence < GARMENT_CONFIDENCE_THRESHOLD
+                and len(prediction["top"]) > 1
+            ):
+                suggested_category = prediction["top"][1][0]
+                suggestion_confidence = prediction["top"][1][1]
+                suggestion_reason = "the AI wasn't sure - it could also be this"
+
+    if (
+        detected_category is None
+        and not garment_classifier.is_available()
+        and manual_category not in ACCESSORY_CATEGORIES
+    ):
 
         try:
 
@@ -522,6 +725,14 @@ def add_wardrobe_item():
                     manual_category if category_explicitly_chosen else None,
                     candidate_label,
                 )
+
+                if allowed and raw_category in UNRELIABLE_AUTO_LABELS:
+                    allowed = False
+                    reason = (
+                        "the model often gives this label to western "
+                        "clothes (jeans, crop tops, skirts), so it is only "
+                        "a suggestion"
+                    )
 
                 if allowed:
 
@@ -567,10 +778,17 @@ def add_wardrobe_item():
 
     color_auto_detected = False
 
+    # One analysis pass gives the dominant colour AND any secondary
+    # colours/pattern (see color_detection.detect_colors). The stored
+    # "color" field keeps exactly its old meaning - a single name that
+    # colour-harmony scoring understands - while the richer reading
+    # travels alongside it.
+    color_analysis = detect_colors(path)
+
     if manual_color:
         final_color = manual_color
     else:
-        detected = detect_dominant_color(path)
+        detected = (color_analysis or {}).get("primary")
 
         if detected:
             final_color = detected
@@ -580,9 +798,10 @@ def add_wardrobe_item():
 
     if not final_color:
         return jsonify({
-            "error":
-                "Couldn't detect a color from this photo - please "
-                "enter one."
+            "success": False,
+            "message":
+                "Couldn't detect a colour from this photo - please "
+                "type the colour and upload again."
         }), 400
 
     # -----------------------------------------------------
@@ -612,9 +831,51 @@ def add_wardrobe_item():
         if detected_category
         else manual_category
     )
+
+    if not final_category:
+        return jsonify({
+            "success": False,
+            "message":
+                "Couldn't recognise this item automatically - please "
+                "choose its category from the list and upload again."
+        }), 400
     # -----------------------------------------------------
     # Store wardrobe item
     # -----------------------------------------------------
+
+    # The structured description of this item (role, style, season and
+    # weather suitability, colours, pattern). Everything in it is
+    # either the user's own input, measured from the photo, or true of
+    # the category by definition - see item_attributes for what is
+    # deliberately left blank rather than guessed.
+    if config.storage_backend() == "cloudinary":
+        try:
+            image_url = storage.upload_local_file(path, user_email, kind="wardrobe")
+        except storage.StorageError as error:
+            print(f"Image upload failed for {filename}: {error}")
+            # The real reason (e.g. "File size too large", "Invalid
+            # Signature", a network error) is shown instead of a generic
+            # "Upload failed", with anything that looks like a key or id
+            # masked. Nothing is saved to Atlas when this happens.
+            import re as _re
+            reason = _re.sub(r"[A-Za-z0-9]{12,}", "***", str(error).split(" to Cloudinary: ")[-1])[:160]
+            return jsonify({
+                "success": False,
+                "message": "Upload failed: the image could not be stored in the "
+                           f"cloud (Cloudinary said: {reason}). Nothing was saved - please try again.",
+            }), 502
+    else:
+        # Only when Cloudinary is not configured at all (config.py
+        # already warns at startup that images then stay on this Mac).
+        image_url = f"/api/uploads/{folder_name}/{filename}"
+
+    attributes = describe_item(
+        final_category,
+        colors=color_analysis,
+        styling=styling,
+        material=material,
+        manual_occasion=occasion,
+    )
 
     item_id = add_item(
         user_email,
@@ -623,7 +884,8 @@ def add_wardrobe_item():
         image_url,
         occasion,
         material,
-        styling
+        styling,
+        attributes
     )
 
 
@@ -677,6 +939,11 @@ def add_wardrobe_item():
 
         "needs_confirmation": bool(suggested_category),
 
+        # What was detected about this item, for the upload
+        # confirmation view. Null/empty fields mean "we could not
+        # tell", never "none" - see item_attributes.
+        "attributes": attributes,
+
         # How confident the model was in a category it DID apply -
         # surfaced so the UI can be honest about an uncertain
         # auto-detection rather than presenting every one as fact.
@@ -690,15 +957,57 @@ def add_wardrobe_item():
 
 # =========================================================
 # SERVE USER WARDROBE IMAGE
+#
+# Only for images stored on THIS machine - anything uploaded since
+# images moved to Cloudinary is served from there instead.
+#
+# This route used to be completely open, which was a real hole: the
+# folder name is derived from the email ("ganga@gmail.com" ->
+# "ganga_digital_wardrobe"), so anyone who could guess an email could
+# read that person's wardrobe photos without logging in. Every other
+# route took its user from the token; this one took a folder name
+# from the URL and trusted it.
+#
+# It now requires a valid token and checks the folder belongs to the
+# caller. Since an <img> tag cannot send an Authorization header, the
+# token may also arrive as ?token= (see JWT_TOKEN_LOCATION above);
+# the frontend's assetUrl() appends it.
 # =========================================================
 
 @app.route(
     "/api/uploads/<folder_name>/<filename>"
 )
+@jwt_required()
 def serve_image(
     folder_name,
     filename
 ):
+
+    user_email = current_user_email()
+
+    own_folder, _ = get_user_folder(user_email)
+
+    # A subfolder (profile pictures live under "<folder>/profile") is
+    # still this user's, so the check is a prefix match rather than
+    # equality - but only on a path separator, so "ganga_x" can never
+    # pass as a prefix of "ganga_x_other".
+    if folder_name != own_folder and not folder_name.startswith(own_folder + "/"):
+
+        return jsonify({
+            "success": False,
+            "message": "Not found"
+        }), 404
+
+    # Defence in depth: a folder name containing ".." or a separator
+    # could otherwise walk out of the uploads directory entirely. The
+    # ownership check above already blocks this, but a traversal
+    # attempt should never depend on one check alone.
+    if ".." in folder_name or folder_name.startswith("/"):
+
+        return jsonify({
+            "success": False,
+            "message": "Not found"
+        }), 404
 
     return send_from_directory(
         os.path.join(
@@ -720,7 +1029,7 @@ def serve_image(
 @jwt_required()
 def view_wardrobe():
 
-    user_email = get_jwt_identity()
+    user_email = current_user_email()
 
     items = get_user_wardrobe(
         user_email
@@ -733,6 +1042,10 @@ def view_wardrobe():
         item["suitable_occasions"] = sorted(
             effective_occasions(item.get("category"), item.get("occasion"))
         )
+
+    # Display name ("Black Bootcut Jeans"), wardrobe tab (Tops,
+    # Bottoms, Sarees...) and style label for the redesigned grid.
+    items = [outfit_presentation.present_item(item) for item in items]
 
     return jsonify({
         "success": True,
@@ -751,7 +1064,7 @@ def view_wardrobe():
 @jwt_required()
 def remove_wardrobe_item(item_id):
 
-    user_email = get_jwt_identity()
+    user_email = current_user_email()
 
     # delete_item now checks ownership itself (see wardrobe.py) -
     # previously this matched on _id alone, which meant any
@@ -781,7 +1094,7 @@ def remove_wardrobe_item(item_id):
 @jwt_required()
 def update_wardrobe_item(item_id):
 
-    user_email = get_jwt_identity()
+    user_email = current_user_email()
 
     data = request.json or {}
 
@@ -825,7 +1138,7 @@ def find_similar_clothes():
         find_similar_in_wardrobe
     )
 
-    user_email = get_jwt_identity()
+    user_email = current_user_email()
 
     account_gender = get_user_gender(user_email)
 
@@ -1071,7 +1384,7 @@ def serve_indofashion_image(filename):
 @jwt_required()
 def recommend_outfit():
 
-    user_email = get_jwt_identity()
+    user_email = current_user_email()
 
     account_gender = get_user_gender(user_email)
 
@@ -1141,12 +1454,75 @@ def recommend_outfit():
         # guarantees a Male account can never receive a Saree/
         # Lehenga/etc suggestion and vice versa, even for
         # legacy/migrated wardrobe items.
+        # Wear history and likes/dislikes personalise the ranking.
+        # A problem reading them must never break recommendations,
+        # so fall back to "no history" instead.
+        try:
+            wear_history = outfit_feedback.get_wear_history(user_email)
+            feedback = outfit_feedback.get_feedback(user_email)
+        except Exception as history_error:
+            print(f"Wear history/feedback skipped: {history_error}")
+            wear_history, feedback = [], {}
+
+        engine_notes = []
+
         recommendations = recommend_outfits(
             wardrobe_items,
             occasion=occasion,
             weather=weather,
             account_gender=account_gender,
-            activity=activity
+            activity=activity,
+            wear_history=wear_history,
+            feedback=feedback,
+            # Each outfit is shown under ONE occasion/activity only,
+            # so casual, college, day out... don't repeat each other.
+            exclusive=True,
+            notes_out=engine_notes,
+            limit=recommend_service.ENGINE_POOL
+        )
+
+        # CATEGORY TAB (Tops, Shoes, Sarees...): single-item
+        # recommendations of exactly that category, ranked for the
+        # occasion - never the outfit list relabelled.
+        category_tab = (request.args.get("category") or "All").strip()
+        canonical_occasion = resolve_occasion_query(occasion)
+        label = outfit_presentation.occasion_label(canonical_occasion)
+
+        if category_tab in item_recommender.GROUPS:
+            item_notes = []
+            items = item_recommender.recommend_items(
+                wardrobe_items, canonical_occasion, category_tab,
+                account_gender=account_gender, weather=weather,
+                colour=request.args.get("colour"), style=request.args.get("style"),
+                wear_history=wear_history, notes=item_notes,
+                debug=request.args.get("debug") == "1",
+            )
+            return jsonify({
+                "success": True,
+                "mode": "items",
+                "category": category_tab,
+                "heading": f"{category_tab} for {label}",
+                "recommendations": items,
+                "notes": item_notes,
+                "inspiration": outfit_presentation.occasion_inspiration(canonical_occasion, account_gender),
+                "weather": weather,
+                "weather_error": weather_error,
+                "used_saved_city": used_saved_city,
+            }), 200
+
+        # Colour/Style filters, then the FINAL VALIDATOR: every outfit
+        # is re-checked against this user's stored wardrobe (exists,
+        # has an image, right gender, complete, right occasion) before
+        # it can reach the browser. Also adds titles and inspiration.
+        recommendations, engine_notes = recommend_service.finalize(
+            recommendations,
+            wardrobe_items,
+            account_gender,
+            resolve_occasion_query(occasion),
+            colour=request.args.get("colour"),
+            style=request.args.get("style"),
+            notes=engine_notes,
+            require_full=(category_tab == "Full Looks"),
         )
 
         # Honest "missing item" messaging (spec section 10) - tells
@@ -1154,10 +1530,13 @@ def recommend_outfit():
         # to complete an outfit for this occasion, instead of just
         # silently returning fewer/zero recommendations. Never
         # fabricates wardrobe contents - see describe_missing_pieces.
-        missing_notes = describe_missing_pieces(
-            wardrobe_items,
-            occasion=occasion,
-            account_gender=account_gender
+        missing_notes = engine_notes + (
+            describe_missing_pieces(
+                wardrobe_items,
+                occasion=occasion,
+                account_gender=account_gender
+            )
+            if not recommendations else []
         )
 
         return jsonify({
@@ -1168,6 +1547,19 @@ def recommend_outfit():
                 recommendations,
 
             "notes": missing_notes,
+
+            "mode": "looks" if category_tab == "Full Looks" else "outfits",
+            "category": category_tab,
+            "heading": (f"Complete Looks for {label}" if category_tab == "Full Looks"
+                        else f"Outfits for {label}"),
+
+            # Pinterest SEARCH links for this occasion - styling ideas
+            # only; the outfits above always come from the user's own
+            # wardrobe. Plain links, so nothing breaks if Pinterest is
+            # unreachable.
+            "inspiration": outfit_presentation.occasion_inspiration(
+                resolve_occasion_query(occasion), account_gender
+            ),
 
             "weather": weather,
 
@@ -1236,7 +1628,7 @@ def weather_lookup():
 @jwt_required()
 def create_trip():
 
-    user_email = get_jwt_identity()
+    user_email = current_user_email()
 
     account_gender = get_user_gender(user_email)
 
@@ -1331,6 +1723,17 @@ def create_trip():
         trip_plan
     )
 
+    # Named looks for the trip (Sightseeing, Evening Dinner...), each
+    # weather-aware and never repeating the main pieces. Added after
+    # saving so the stored trip stays small.
+    try:
+        trip_plan["looks"] = recommend_service.trip_looks(
+            wardrobe_items, account_gender, weather
+        )
+    except Exception as e:
+        print(f"Trip looks skipped: {e}")
+        trip_plan["looks"] = []
+
     return jsonify({
 
         "success": True,
@@ -1355,7 +1758,7 @@ def create_trip():
 @jwt_required()
 def list_trips():
 
-    user_email = get_jwt_identity()
+    user_email = current_user_email()
 
     trips = get_user_trips(user_email)
 
@@ -1368,7 +1771,7 @@ def list_trips():
 # =========================================================
 # USER PROFILE
 #
-# All three routes below use get_jwt_identity() as the ONLY source
+# All three routes below use current_user_email() as the ONLY source
 # of which account is being read/changed - never an email/id taken
 # from the request body or URL - so an account can only ever view,
 # edit, or delete ITSELF, never another user's profile.
@@ -1378,7 +1781,7 @@ def list_trips():
 @jwt_required()
 def get_profile():
 
-    user_email = get_jwt_identity()
+    user_email = current_user_email()
 
     profile = get_user_profile(user_email)
 
@@ -1398,7 +1801,7 @@ def get_profile():
 @jwt_required()
 def edit_profile():
 
-    user_email = get_jwt_identity()
+    user_email = current_user_email()
 
     data = request.json or {}
 
@@ -1421,7 +1824,7 @@ def edit_profile():
 @jwt_required()
 def upload_profile_picture():
 
-    user_email = get_jwt_identity()
+    user_email = current_user_email()
 
     image = request.files.get("image")
 
@@ -1495,11 +1898,90 @@ def upload_profile_picture():
     }), 200
 
 
+# =========================================================
+# OUTFIT WEAR HISTORY + LIKE / DISLIKE
+# =========================================================
+
+@app.route("/api/outfits/wear", methods=["POST"])
+@jwt_required()
+def wear_outfit():
+    user_email = current_user_email()
+    data = request.json or {}
+    entry = outfit_feedback.log_wear(
+        user_email, data.get("item_ids"), data.get("occasion")
+    )
+    if not entry:
+        return jsonify({"success": False, "message": "No valid items in this outfit"}), 400
+    return jsonify({
+        "success": True,
+        "message": "Saved - these pieces will be suggested less for the next few days.",
+        "outfit_key": entry["outfit_key"]
+    }), 200
+
+
+@app.route("/api/outfits/feedback", methods=["POST"])
+@jwt_required()
+def outfit_feedback_route():
+    user_email = current_user_email()
+    data = request.json or {}
+    value = data.get("value")
+    if value not in ("like", "dislike", None):
+        return jsonify({"success": False, "message": "value must be like, dislike or null"}), 400
+    key = outfit_feedback.set_feedback(user_email, data.get("item_ids"), value)
+    if not key:
+        return jsonify({"success": False, "message": "No valid items in this outfit"}), 400
+    return jsonify({"success": True, "outfit_key": key, "value": value}), 200
+
+
+@app.route("/api/outfits/history", methods=["GET"])
+@jwt_required()
+def outfit_history():
+    user_email = current_user_email()
+    history = outfit_feedback.get_wear_history(user_email)
+    for entry in history:
+        entry["worn_at"] = entry["worn_at"].isoformat() + "Z"
+    return jsonify({"success": True, "history": history}), 200
+
+
+# =========================================================
+# HOME PAGE - everything built from the user's real wardrobe
+# =========================================================
+
+@app.route("/api/home", methods=["GET"])
+@jwt_required()
+def home_page():
+    user_email = current_user_email()
+    account_gender = get_user_gender(user_email)
+    wardrobe_items = get_user_wardrobe(user_email)
+    profile = get_user_profile(user_email) or {}
+
+    weather = None
+    if profile.get("city"):
+        try:
+            weather = get_weather(profile["city"])
+        except Exception as e:
+            print(f"Home weather skipped: {e}")
+
+    try:
+        wear_history = outfit_feedback.get_wear_history(user_email)
+        feedback = outfit_feedback.get_feedback(user_email)
+    except Exception:
+        wear_history, feedback = [], {}
+
+    data = recommend_service.build_home(
+        wardrobe_items, account_gender, profile, weather,
+        wear_history, feedback,
+    )
+    for item in data["recent"] + data["favourites"]:
+        item.pop("created_at", None)
+    return jsonify({"success": True, **data}), 200
+
+
 @app.route("/api/user/account", methods=["DELETE"])
 @jwt_required()
 def delete_account():
 
-    user_email = get_jwt_identity()
+    user_email = current_user_email()
 
     deleted = delete_user_account(user_email)
 
@@ -1516,6 +1998,7 @@ def delete_account():
     # nobody can ever see or reach again.
     delete_all_wardrobe_for_user(user_email)
     delete_all_trips_for_user(user_email)
+    outfit_feedback.delete_all_for_user(user_email)
 
     _, folder_path = get_user_folder(user_email)
     shutil.rmtree(folder_path, ignore_errors=True)
@@ -1526,6 +2009,16 @@ def delete_account():
 
 
 if __name__ == "__main__":
+
+    # Uniqueness guarantees (one account per email, no duplicated
+    # migrated items). Reported, never fatal: a database that already
+    # holds duplicates still serves requests - see account_doctor.
+    try:
+        INDEX_PROBLEMS = ensure_indexes()
+    except Exception as error:  # noqa: BLE001
+        INDEX_PROBLEMS = [f"could not check indexes: {type(error).__name__}"]
+    for problem in INDEX_PROBLEMS:
+        print(f"WARNING: index not in place - {problem}")
 
     app.run(
         debug=True,

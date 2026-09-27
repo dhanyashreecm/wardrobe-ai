@@ -1,306 +1,208 @@
 import { useEffect, useState } from "react";
-import axios from "axios";
-import { useNavigate, Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import Layout from "../components/Layout";
-import "../App.css";
-import { API_URL, assetUrl } from "../config";
+import { OutfitCard, OutfitDrawer, useOutfitActions } from "../components/Outfit";
+import { PlaneIcon, TryOnIcon, SearchIcon, SparkleIcon } from "../components/Icons";
+import { assetUrl } from "../config";
+import { authGet, swatch } from "../lib/api";
 
-// =========================================================
-// CATEGORY BUCKETS
-//
-// The wardrobe stores fine-grained categories (Shirt, Men
-// Kurta, Palazzos, ...); the dashboard groups them into a
-// handful of tiles so the home page reads as an overview,
-// not a wall of 24 categories.
-// =========================================================
+export function StyleEditStrip({ edits, onOpenEdit }) {
+  return (
+    <div className="aw-panel aw-edit-strip">
+      <div className="aw-edit-intro">
+        <div className="spark">✧</div>
+        <h2>Your Style Edit</h2>
+        <p className="aw-section-sub" style={{ margin: 0 }}>Curated from your wardrobe</p>
+      </div>
+      {edits.map((edit) => {
+        const pieces = (edit.outfits[0]?.items || []).slice(0, 3);
+        return (
+          <button
+            type="button"
+            key={edit.key}
+            className="aw-card aw-edit-card"
+            onClick={() => onOpenEdit(edit)}
+          >
+            <div className={`aw-edit-img ${pieces.length === 1 ? "single" : ""}`}>
+              {pieces.map((item) => (
+                <img key={item._id} src={assetUrl(item.image_path)} alt={item.display_name} />
+              ))}
+            </div>
+            <div className="aw-edit-body">
+              <strong>{edit.icon} {edit.title}</strong>
+              <span>
+                {edit.count
+                  ? `${edit.subtitle} · ${edit.count} look${edit.count === 1 ? "" : "s"}`
+                  : "Add a few more pieces to unlock this edit"}
+              </span>
+              <span className="arrow">→</span>
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
-const CATEGORY_BUCKETS = [
-  {
-    key: "tops",
-    label: "Tops",
-    tint: "tile-tint-1",
-    match: ["Shirt", "Blouse", "Women Kurta", "Men Kurta"],
-  },
-  {
-    key: "bottoms",
-    label: "Bottoms",
-    tint: "tile-tint-3",
-    match: [
-      "Pant",
-      "Skirt",
-      "Leggings & Salwars",
-      "Palazzos",
-      "Dhoti Pants",
-    ],
-  },
-  {
-    key: "dresses",
-    label: "Dresses & Sets",
-    tint: "tile-tint-4",
-    match: ["Dress", "Gown", "Lehenga"],
-  },
-  {
-    key: "outerwear",
-    label: "Outerwear",
-    tint: "tile-tint-5",
-    match: ["Jacket", "Nehru Jacket", "Sherwani"],
-  },
-  {
-    key: "footwear",
-    label: "Footwear",
-    tint: "tile-tint-2",
-    match: ["Mojaris Men", "Mojaris Women"],
-  },
-  {
-    key: "ethnic",
-    label: "Ethnic Wear",
-    tint: "tile-tint-6",
-    match: ["Saree", "Dupatta", "Petticoat"],
-  },
-  {
-    key: "accessories",
-    label: "Accessories",
-    tint: "tile-tint-1",
-    match: ["Bag", "Watch", "Belt", "Jewelry"],
-  },
-];
-
-const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-
-// Set at registration (see Register.js) and returned by every
-// login (see Login.js) - shown here so the account's wardrobe is
-// unambiguous from the moment the dashboard loads, matching the
-// same label already used on Wardrobe.js/OutfitRecommendation.js/
-// TripPlanner.js.
-const GENDER_LABELS = {
-  male: "Men's Wardrobe",
-  female: "Women's Wardrobe"
-};
+export function ItemStrip({ items }) {
+  return (
+    <div className="aw-strip">
+      {items.map((item) => (
+        <Link to="/wardrobe" key={item._id} className="aw-card aw-item" style={{ textDecoration: "none", color: "inherit" }}>
+          <img className="aw-item-img" src={assetUrl(item.image_path)} alt={item.display_name} />
+          <div className="aw-item-body">
+            <div className="aw-item-name">{item.display_name}</div>
+            <div className="aw-item-meta">{item.group}</div>
+            <div className="aw-dots"><span className="aw-dot" style={{ background: swatch(item.color) }} /></div>
+          </div>
+        </Link>
+      ))}
+    </div>
+  );
+}
 
 function Dashboard() {
-  const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
-
-  const genderKey = (localStorage.getItem("gender") || "").toLowerCase();
-  const genderLabel = GENDER_LABELS[genderKey];
+  const [home, setHome] = useState(null);
+  const [error, setError] = useState("");
+  const [open, setOpen] = useState(null);
+  const actions = useOutfitActions();
 
   useEffect(() => {
-    const token = localStorage.getItem("token");
-
-    if (!token) {
+    if (!localStorage.getItem("token")) {
       navigate("/login");
       return;
     }
-
-    axios
-      .get(`${API_URL}/api/wardrobe`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      .then((res) => setItems(res.data.items || []))
+    authGet("/api/home")
+      .then(setHome)
       .catch((err) => {
-        console.error("Dashboard wardrobe fetch failed:", err);
-        // Clearing the token here is what matters, not just the
-        // redirect: without it, Login.js's own "already logged in?"
-        // check (see Login.js) sees this same stale/invalid token
-        // still in localStorage and immediately bounces straight
-        // back to /dashboard, which fails again, which bounces
-        // back again... a fast redirect loop that trips the
-        // browser's history.replaceState rate limit within seconds
-        // (this is the "Attempt to use history.replaceState() more
-        // than 100 times per 10 seconds" crash). Whatever the actual
-        // cause was (backend not running, an expired/invalid token,
-        // a network error), the correct next step is always "log in
-        // again" - so this always logs out cleanly instead of
-        // silently retrying forever.
-        localStorage.removeItem("token");
-        localStorage.removeItem("gender");
-        navigate("/login");
-      })
-      .finally(() => setLoading(false));
+        if (err.response?.status === 401 || err.response?.status === 422) {
+          localStorage.removeItem("token");
+          navigate("/login");
+        } else {
+          setError("Couldn't load your wardrobe - is the backend running?");
+        }
+      });
   }, [navigate]);
 
-  // -----------------------------------------------------
-  // STATS
-  // -----------------------------------------------------
-
-  const totalItems = items.length;
-
-  const categoryCount = new Set(
-    items.map((item) => item.category).filter(Boolean)
-  ).size;
-
-  const favoriteCount = items.filter(
-    (item) => item.favorite
-  ).length;
-
-  const recentCount = items.filter((item) => {
-    if (!item.created_at) return false;
-    const created = new Date(item.created_at).getTime();
-    return !Number.isNaN(created) && Date.now() - created < ONE_WEEK_MS;
-  }).length;
-
-  // -----------------------------------------------------
-  // CATEGORY TILES
-  // -----------------------------------------------------
-
-  const tiles = CATEGORY_BUCKETS.map((bucket) => {
-    const bucketItems = items.filter((item) =>
-      bucket.match.includes(item.category)
-    );
-
-    const cover = bucketItems.find((item) => item.image_path);
-
-    return {
-      ...bucket,
-      count: bucketItems.length,
-      cover,
-    };
-  }).filter((bucket) => bucket.count > 0);
+  const heroImages = (home?.recent || []).slice(0, 3);
+  const firstName = (home?.name || "").split(" ")[0];
 
   return (
     <Layout>
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">
-            {genderLabel || "My Digital Wardrobe"}
-          </h1>
-          <p className="page-subtitle">
-            Your clothes, your style, all in one place.
+      <div className="aw-hero">
+        <div className="aw-hero-text">
+          <div className="script">Welcome to your{firstName ? `, ${firstName}` : ""}</div>
+          <h1>AI Wardrobe</h1>
+          <p style={{ fontSize: 17, color: "#3f3531", marginBottom: 14 }}>
+            Your clothes. Your style. Your possibilities.
           </p>
-        </div>
-      </div>
-
-      {!loading && totalItems === 0 && (
-        <p style={{ color: "#8a7a6d", marginBottom: "24px" }}>
-          Your wardrobe is empty so far —{" "}
-          <Link to="/wardrobe" style={{ color: "#c1694f", fontWeight: 600 }}>
-            add your first item
-          </Link>{" "}
-          to see it here.
-        </p>
-      )}
-
-      {/* STAT CARDS */}
-
-      <div className="stat-grid">
-        <div className="stat-card">
-          <div className="stat-icon tone-primary">👗</div>
-          <div>
-            <div className="stat-value">{totalItems}</div>
-            <div className="stat-label">Total Items</div>
+          <p>
+            Get personalised outfit recommendations, plan your looks for any
+            occasion, explore travel-ready outfits and so much more — all from
+            your own wardrobe.
+          </p>
+          <div style={{ marginTop: 24 }}>
+            <Link to="/wardrobe" className="aw-btn">Explore Your Wardrobe →</Link>
           </div>
         </div>
-
-        <div className="stat-card">
-          <div className="stat-icon tone-sage">🗂️</div>
-          <div>
-            <div className="stat-value">{categoryCount}</div>
-            <div className="stat-label">Categories</div>
-          </div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-icon tone-blue">❤️</div>
-          <div>
-            <div className="stat-value">{favoriteCount}</div>
-            <div className="stat-label">Favorites</div>
-          </div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-icon tone-lavender">🕓</div>
-          <div>
-            <div className="stat-value">{recentCount}</div>
-            <div className="stat-label">Added This Week</div>
-          </div>
-        </div>
-      </div>
-
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "2fr 1fr",
-          gap: "24px",
-          alignItems: "start",
-        }}
-      >
-        <div>
-          {/* CATEGORY TILES */}
-
-          {tiles.length > 0 && (
+        <div className="aw-hero-art">
+          {heroImages.length >= 1 ? (
             <>
-              <h2 className="section-title" style={{ marginTop: 0 }}>
-                Browse by category
-              </h2>
+              {heroImages.map((item) => (
+                <img key={item._id} src={assetUrl(item.image_path)} alt={item.display_name} />
+              ))}
+              <span className="aw-hero-script">Better outfits, brighter days ♡</span>
+            </>
+          ) : (
+            <div className="aw-hero-placeholder">Your wardrobe starts here ✦</div>
+          )}
+        </div>
+      </div>
 
-              <div className="tile-grid">
-                {tiles.map((tile) => (
-                  <Link
-                    key={tile.key}
-                    to="/wardrobe"
-                    className={`category-tile ${
-                      tile.cover ? "" : tile.tint
-                    }`}
-                  >
-                    {tile.cover && (
-                      <>
-                        <img
-                          src={assetUrl(tile.cover.image_path)}
-                          alt={tile.label}
-                        />
-                        <div className="tile-overlay" />
-                      </>
-                    )}
+      {error && <p className="aw-note" style={{ marginTop: 20 }}>{error}</p>}
 
-                    <span className="tile-label">{tile.label}</span>
+      {home && (
+        <>
+          <div style={{ marginTop: 28 }}>
+            <StyleEditStrip
+              edits={home.edits}
+              onOpenEdit={(edit) =>
+                edit.outfits[0] ? setOpen(edit.outfits[0]) : navigate("/wardrobe")
+              }
+            />
+          </div>
 
-                    <div>
-                      <span className="tile-count">
-                        {tile.count} item
-                        {tile.count === 1 ? "" : "s"}
-                      </span>
-                    </div>
-                  </Link>
+          <div className="aw-shortcuts" style={{ marginTop: 22 }}>
+            <Link to="/recommend" className="aw-card aw-shortcut">
+              <span className="ico"><SparkleIcon width={22} /></span>
+              <div><strong>Style me</strong><span>Outfits for any occasion</span></div>
+            </Link>
+            <Link to="/trip" className="aw-card aw-shortcut">
+              <span className="ico"><PlaneIcon width={22} /></span>
+              <div>
+                <strong>Trip Planner</strong>
+                <span>
+                  {home.weather
+                    ? `${home.city}: ${Math.round(home.weather.temp_c)}°C, ${home.weather.description || home.weather.condition}`
+                    : "Weather-ready packing"}
+                </span>
+              </div>
+            </Link>
+            <Link to="/tryon" className="aw-card aw-shortcut">
+              <span className="ico"><TryOnIcon width={22} /></span>
+              <div><strong>Virtual Try-On</strong><span>See a look put together</span></div>
+            </Link>
+            <Link to="/similar" className="aw-card aw-shortcut">
+              <span className="ico"><SearchIcon width={22} /></span>
+              <div><strong>Find Similar</strong><span>Match any clothing photo</span></div>
+            </Link>
+          </div>
+
+          {home.top_pick && (
+            <>
+              <h2 className="aw-section-title">Recommended for you</h2>
+              <p className="aw-section-sub">One look from each of your edits</p>
+              <div className="aw-outfit-grid">
+                {home.edits.filter((e) => e.outfits[0]).map((edit) => (
+                  <OutfitCard
+                    key={edit.key}
+                    outfit={edit.outfits[0]}
+                    badge={`${edit.icon} ${edit.title}`}
+                    onOpen={setOpen}
+                    actions={actions}
+                  />
                 ))}
               </div>
             </>
           )}
-        </div>
 
-        {/* QUICK ACTIONS */}
+          <div className="aw-row-head">
+            <h2 className="aw-section-title">Recently added</h2>
+            <Link to="/wardrobe" className="aw-link">View all {home.item_count} items →</Link>
+          </div>
+          {home.recent.length ? (
+            <ItemStrip items={home.recent} />
+          ) : (
+            <div className="aw-empty">
+              <h3>Your wardrobe is empty</h3>
+              <p>Add your first piece and the AI will recognise it for you.</p>
+              <Link to="/wardrobe" className="aw-btn" style={{ marginTop: 14 }}>+ Add clothes</Link>
+            </div>
+          )}
 
-        <div className="side-panel">
-          <h3>Quick Actions</h3>
+          {home.favourites.length > 0 && (
+            <>
+              <h2 className="aw-section-title">Your favourites ♡</h2>
+              <ItemStrip items={home.favourites} />
+            </>
+          )}
+        </>
+      )}
 
-          <ul className="quick-actions">
-            <li>
-              <Link to="/wardrobe">
-                <span className="qa-icon">＋</span>
-                Add New Item
-              </Link>
-            </li>
-            <li>
-              <Link to="/recommend">
-                <span className="qa-icon">✨</span>
-                Get Outfit Recommendation
-              </Link>
-            </li>
-            <li>
-              <Link to="/trip">
-                <span className="qa-icon">🧳</span>
-                Plan a Trip
-              </Link>
-            </li>
-            <li>
-              <Link to="/similar">
-                <span className="qa-icon">🔍</span>
-                Find Similar Clothes
-              </Link>
-            </li>
-          </ul>
-        </div>
-      </div>
+      {!home && !error && <p className="aw-section-sub" style={{ marginTop: 24 }}>Loading your wardrobe…</p>}
+
+      <OutfitDrawer outfit={open} onClose={() => setOpen(null)} actions={actions} />
     </Layout>
   );
 }

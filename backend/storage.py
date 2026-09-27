@@ -85,8 +85,11 @@ def user_folder_key(user_email):
     Short, stable, non-reversible id for one user's images. The same
     email always yields the same folder, so a user's uploads group
     together, but the folder name reveals nothing about who they are.
+    Normalised first, so "Ganga@Gmail.com" and "ganga@gmail.com" share
+    one folder.
     """
-    digest = hashlib.sha256((user_email or "").encode("utf-8")).hexdigest()
+    user_email = (user_email or "").strip().lower()
+    digest = hashlib.sha256(user_email.encode("utf-8")).hexdigest()
     return digest[:16]
 
 
@@ -260,23 +263,56 @@ def _save_locally(file_storage, user_email, kind):
     }
 
 
-def upload_local_file(path, user_email, kind="wardrobe"):
+# Cloudinary's free plan rejects images over 10 MB, while the app
+# accepts photos up to 15 MB - so a large phone photo used to pass
+# validation and then fail with "Upload failed" at the very last step.
+# Anything over this size is sent as a resized JPEG copy instead (the
+# original on disk is never modified).
+CLOUD_MAX_BYTES = 9_500_000
+CLOUD_MAX_SIDE = 2560
+
+
+def _within_upload_limit(path):
+    try:
+        if os.path.getsize(path) <= CLOUD_MAX_BYTES:
+            return path
+        from PIL import Image, ImageOps
+
+        with Image.open(path) as image:
+            image = ImageOps.exif_transpose(image).convert("RGB")
+            image.thumbnail((CLOUD_MAX_SIDE, CLOUD_MAX_SIDE))
+            smaller = f"{path}.cloud.jpg"
+            image.save(smaller, "JPEG", quality=88, optimize=True)
+        return smaller
+    except Exception as error:  # noqa: BLE001 - fall back to the original
+        print(f"Could not shrink {os.path.basename(path)} before upload: {error}")
+        return path
+
+
+def upload_local_file(path, user_email, kind="wardrobe", public_id=None):
     """
     Uploads a file that is ALREADY on disk (as opposed to one arriving
-    in a request). Used by the migration script to move a machine's
-    existing backend/uploads/ images into Cloudinary; kept here so
-    there is exactly one piece of code that knows how Cloudinary
-    folders and public ids are built.
+    in a request). Used by the upload route and by the migration script
+    to move a machine's existing backend/uploads/ images into
+    Cloudinary; kept here so there is exactly one piece of code that
+    knows how Cloudinary folders and public ids are built.
+
+    `public_id` lets the migration use a STABLE id per source item, so
+    a re-run after an interruption finds the image it already uploaded
+    (overwrite=False returns the existing asset) instead of creating a
+    second copy in Cloudinary.
     """
     uploader = _ensure_cloudinary()
 
     folder = f"ai-wardrobe/{user_folder_key(user_email)}/{kind}"
 
-    public_id = _unique_public_id(os.path.basename(path))
+    public_id = public_id or _unique_public_id(os.path.basename(path))
+
+    upload_path = _within_upload_limit(path)
 
     try:
         result = uploader.upload(
-            path,
+            upload_path,
             folder=folder,
             public_id=public_id,
             resource_type="image",
@@ -284,6 +320,13 @@ def upload_local_file(path, user_email, kind="wardrobe"):
         )
     except Exception as error:
         raise StorageError(f"Could not upload {path} to Cloudinary: {error}")
+
+    finally:
+        if upload_path != path:
+            try:
+                os.remove(upload_path)
+            except OSError:
+                pass
 
     url = result.get("secure_url")
 

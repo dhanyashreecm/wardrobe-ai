@@ -32,3 +32,5 @@ joblib
 #                machine's disk only, and says so at startup.
 dnspython
 cloudinary
+#   certifi    - CA bundle so macOS Python can open TLS to Atlas (db.py).
+certifi

@@ -298,7 +298,79 @@ URL alone.
 
 ---
 
-## 8. Troubleshooting
+## 8. Welcome and sign-in emails (optional)
+
+When outgoing mail is configured, creating an account sends a
+"Welcome to Wardrobe AI" message, and every successful login sends a
+"Welcome back" notice that also serves as a security alert - if the
+account holder did not just sign in, the message tells them someone
+else did.
+
+This is entirely optional. With no mail settings, accounts, wardrobes
+and recommendations all work exactly as before; nothing is sent.
+
+### Setting it up with a Gmail account
+
+`SMTP_PASSWORD` is **not** the Gmail password. Google stopped
+accepting account passwords over SMTP in 2022, so an App Password is
+required:
+
+1. The Google account must have 2-Step Verification turned on.
+2. Google Account -> Security -> 2-Step Verification -> App passwords.
+3. Create one and copy the 16-character code.
+
+Then, on each machine:
+
+```
+python -m backend.set_secret SMTP_USERNAME     # the Gmail address
+python -m backend.set_secret SMTP_PASSWORD     # the 16-char App Password
+```
+
+`SMTP_HOST` and `SMTP_PORT` default to Gmail's (`smtp.gmail.com`,
+port 587) and only need setting for a different provider. Port 465 is
+also supported and switches to implicit SSL automatically.
+
+To send only the joining message, or only the sign-in notice, add one
+of these to `.env` by hand:
+
+```
+SEND_WELCOME_EMAIL=false
+SEND_LOGIN_EMAIL=false
+```
+
+`set_secret` preserves settings it does not manage, so a line added
+this way survives the next time a secret is changed.
+
+### Why mail can never break logging in
+
+Mail servers are slow and occasionally down, and an App Password can
+be revoked without warning. None of that is a user's problem when
+they are trying to log in, so `backend/email_service.py` is built so
+it cannot become one:
+
+- every send runs on a **background thread**, so the login response is
+  already on its way back to the browser before the mail server is
+  contacted. A server that takes 1.5 seconds adds nothing to login.
+- every failure is caught and written to the server log only. There is
+  no path by which a mail problem produces a failed login, a 500, or
+  an error on screen.
+- with no settings configured, every function quietly does nothing.
+
+Mail is only ever sent on a **successful** registration or login, and
+only to the address stored on the account - so typing a stranger's
+address into the login form cannot make the app send them anything.
+
+The App Password is read from `.env`, used, and never logged, never
+returned by any route, and never included in an error message. The
+failure descriptions in `email_service._describe_failure` are written
+by hand for that reason: `smtplib`'s own exception text can echo the
+credentials it just tried.
+
+`run_test22.py` in the test harness covers all of the above,
+including that login still succeeds against five different kinds of
+mail-server failure.
+
+## 9. Troubleshooting
 
 **"Wardrobe-AI cannot start: required configuration is missing"** -
 there is no `.env`, or it is missing a value. The message lists which.

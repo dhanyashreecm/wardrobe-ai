@@ -132,7 +132,22 @@ load_env_files()
 
 
 def _get(name, default=""):
-    return os.environ.get(name, default).strip()
+    """
+    One setting, with blank treated as absent.
+
+    That last part matters more than it looks. set_secret.py writes a
+    line for EVERY known setting, so a .env routinely contains
+    "SMTP_HOST=" with nothing after it. Without this check, the mere
+    presence of that empty line would beat the sensible default below
+    and leave the host as "" - a setting that was never deliberately
+    chosen silently overriding one that was.
+    """
+    value = os.environ.get(name, "")
+
+    if value is None or not value.strip():
+        return default
+
+    return value.strip()
 
 
 # ============================================================
@@ -199,6 +214,76 @@ OPENWEATHER_API_KEY = _get("OPENWEATHER_API_KEY")
 
 
 # ============================================================
+# OUTGOING EMAIL (optional - see email_service.py)
+#
+# Used for the welcome message on registration and the sign-in
+# notice on login. Entirely optional: with SMTP_USERNAME or
+# SMTP_PASSWORD missing, email_service does nothing at all and every
+# other part of the app behaves exactly as before.
+#
+# For a Gmail account, SMTP_PASSWORD must be a 16-character App
+# Password (Google Account -> Security -> 2-Step Verification ->
+# App passwords), NOT the account's own password. Google stopped
+# accepting real passwords over SMTP in 2022, so an ordinary
+# password here fails authentication every time.
+# ============================================================
+
+SMTP_HOST = _get("SMTP_HOST", "smtp.gmail.com")
+
+# 587 is STARTTLS (what Gmail wants); 465 is implicit SSL. Anything
+# unparseable falls back to 587 rather than crashing config import -
+# a typo in .env should not stop the app from starting.
+try:
+    SMTP_PORT = int(_get("SMTP_PORT", "587") or "587")
+except ValueError:
+    SMTP_PORT = 587
+
+SMTP_USE_SSL = SMTP_PORT == 465
+
+SMTP_USERNAME = _get("SMTP_USERNAME")
+
+# An App Password. Never printed, never returned by any route, never
+# included in an error message - see email_service._describe_failure.
+SMTP_PASSWORD = _get("SMTP_PASSWORD")
+
+# What the recipient sees in their inbox as the sender's name.
+SMTP_FROM_NAME = _get("SMTP_FROM_NAME", "Wardrobe AI")
+
+# Almost always the same as SMTP_USERNAME, and defaults to it in
+# email_service. Gmail rejects a From address it is not sending as,
+# so this only helps on providers that allow aliases.
+SMTP_FROM_EMAIL = _get("SMTP_FROM_EMAIL")
+
+
+def _flag(name, default=True):
+    """Reads a yes/no setting, tolerating the obvious spellings."""
+    raw = _get(name).lower()
+
+    if not raw:
+        return default
+
+    return raw in ("1", "true", "yes", "on")
+
+
+# Whether a successful LOGIN sends a "welcome back" notice. The
+# welcome-on-registration message is not affected by this. Set
+# SEND_LOGIN_EMAIL=false in .env to keep only the joining message.
+SEND_LOGIN_EMAIL = _flag("SEND_LOGIN_EMAIL", True)
+
+SEND_WELCOME_EMAIL = _flag("SEND_WELCOME_EMAIL", True)
+
+
+def email_configured():
+    """
+    True only when there is a mailbox to send AS and a password to
+    send WITH. Partial settings count as unconfigured, for the same
+    reason as Cloudinary above: a half-configured account fails at
+    the moment a user is waiting, rather than at startup.
+    """
+    return bool(SMTP_HOST and SMTP_USERNAME and SMTP_PASSWORD)
+
+
+# ============================================================
 # VALIDATION
 # ============================================================
 
@@ -250,6 +335,13 @@ def warnings():
             "CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET in .env to fix."
         )
 
+    if not email_configured():
+        found.append(
+            "Outgoing email is not configured - accounts still work "
+            "normally, but no welcome or sign-in message will be sent. "
+            "Set SMTP_USERNAME and SMTP_PASSWORD in .env to enable it."
+        )
+
     if not OPENWEATHER_API_KEY:
         found.append(
             "OPENWEATHER_API_KEY is not set - outfit recommendations and "
@@ -283,6 +375,9 @@ def describe_startup():
     lines.append(f"  Image storage : {storage_backend()}")
     lines.append(
         f"  Weather       : {'configured' if OPENWEATHER_API_KEY else 'not configured'}"
+    )
+    lines.append(
+        f"  Email         : {'configured' if email_configured() else 'not configured'}"
     )
 
     return "\n".join(lines)

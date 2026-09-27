@@ -1,7 +1,11 @@
 """
 ONE COMMAND to move this computer onto the shared setup:
 
-    python -m backend.sync_setup
+    python -m backend.sync_setup --only-email you@gmail.com
+
+(--only-email migrates just that account's wardrobe and trips into its
+EXISTING Atlas account and verifies it; without it, every account on
+this computer is migrated.)
 
 It runs the whole sequence in the only safe order, stopping the moment
 anything is wrong:
@@ -328,6 +332,11 @@ def main():
         help="This machine's local database name (default: wardrobe_db)",
     )
     parser.add_argument(
+        "--only-email",
+        default=None,
+        help="Migrate only this account's items into its existing Atlas account.",
+    )
+    parser.add_argument(
         "--verify-only",
         action="store_true",
         help="Skip straight to verification of an already-migrated setup.",
@@ -339,7 +348,11 @@ def main():
     )
     args = parser.parse_args()
 
+    scope = ["--only-email", args.only_email] if args.only_email else []
+
     if args.verify_only:
+        if args.only_email:
+            return 0 if run_step("Verification", ["backend.migrate_to_atlas", "--verify-only", *scope]) else 1
         return 0 if verify() else 1
 
     # ---------------------------------------------------------------
@@ -384,7 +397,7 @@ def main():
     # ---------------------------------------------------------------
     heading("STEP 3 of 6 - DRY RUN (nothing is written or uploaded)")
 
-    if not run_step("The dry run", ["backend.migrate_to_atlas", "--dry-run"]):
+    if not run_step("The dry run", ["backend.migrate_to_atlas", "--dry-run", *scope]):
         return 1
 
     # ---------------------------------------------------------------
@@ -411,7 +424,7 @@ def main():
     # ---------------------------------------------------------------
     heading("STEP 5 of 6 - MIGRATING")
 
-    if not run_step("The migration", ["backend.migrate_to_atlas"]):
+    if not run_step("The migration", ["backend.migrate_to_atlas", *scope]):
         print(f"\n  Your local data is untouched, and backed up at: {backup_path}")
         print("  Fix the problem above and run this command again - it will")
         print("  resume, copying only what is still missing.")
@@ -420,7 +433,13 @@ def main():
     # ---------------------------------------------------------------
     heading("STEP 6 of 6 - VERIFYING THE RESULT")
 
-    passed = verify(expected=total_images)
+    if args.only_email:
+        # migrate_to_atlas --only-email already re-read Atlas and
+        # verified this account (and returned non-zero if anything was
+        # wrong), so reaching here means it passed.
+        passed = True
+    else:
+        passed = verify(expected=total_images)
 
     print()
     print(SEPARATOR)

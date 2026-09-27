@@ -54,7 +54,7 @@ function Register() {
     setLoading(true);
     try {
       const res = await axios.post(`${API_URL}/api/register`, {
-        name, email, password, gender
+        name, email: email.trim().toLowerCase(), password, gender
       });
       if (res.data.success) {
         // Done its job - clear it so a later visit to Login/Register

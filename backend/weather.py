@@ -50,9 +50,98 @@ COLD_THRESHOLD_C = 15
 # converted to km/h (kph) for anything shown to the user or reasoned
 # about here - 20 kph (~5.5 m/s) is a "you'll feel it" breeze, not a
 # storm.
+# At or above this chance of rain, a day is treated as rainy even if
+# no individual reading came back as actual rain - 50% is the point
+# where most people would take a jacket rather than risk it.
+RAIN_LIKELY_PCT = 50
+
 WINDY_THRESHOLD_KPH = 20
 HUMID_THRESHOLD_PCT = 70
 MPS_TO_KPH = 3.6
+
+
+# ============================================================
+# USER-SAFE ERROR MESSAGES
+#
+# Whatever goes wrong here ends up in front of a normal user (app.py
+# passes it through as "weather_error"), so it must never read like a
+# note to the developer. The old messages told every user to "set
+# OPENWEATHER_API_KEY in your environment" - an instruction that makes
+# no sense to someone who just wants to know what to wear, and which
+# leaks how the app is configured.
+#
+# The technical detail still matters for whoever runs the app, so it
+# is printed to the server log and never returned. Nothing here can
+# contain the key itself: the key only ever appears in the request
+# URL, which is not included in any message below.
+# ============================================================
+
+class WeatherUnavailable(RuntimeError):
+    """
+    Raised for every weather failure. Its str() is the user-facing
+    sentence; `detail` carries the technical cause for the log.
+    """
+
+    def __init__(self, user_message, detail=""):
+        super().__init__(user_message)
+        self.detail = detail
+
+
+def _unavailable(user_message, detail, city=""):
+    print(f"Weather lookup failed for {city or '(no city)'}: {detail}")
+    return WeatherUnavailable(user_message, detail)
+
+
+def _describe_failure(error, city):
+    """
+    Maps a fetch failure onto something a user can act on - a
+    misspelled city is a different problem from a service outage, and
+    telling them apart is the difference between a useful message and
+    a shrug.
+    """
+    status = getattr(error, "code", None)
+
+    if status == 404:
+        return _unavailable(
+            f"We couldn't find a place called \"{city}\". "
+            "Check the spelling, or try a nearby larger city.",
+            f"HTTP 404 for {city}", city,
+        )
+
+    if status in (401, 403):
+        # An invalid or not-yet-active key. The user cannot fix this
+        # and should not be told to try.
+        return _unavailable(
+            "Weather isn't available right now. Your outfit suggestions "
+            "will still work, just without weather.",
+            f"HTTP {status} - API key rejected or not yet active", city,
+        )
+
+    if status == 429:
+        return _unavailable(
+            "The weather service is busy right now - please try again "
+            "in a few minutes.",
+            "HTTP 429 - rate limited", city,
+        )
+
+    if status is not None and 500 <= status < 600:
+        return _unavailable(
+            "The weather service is temporarily unavailable. Please try "
+            "again shortly.",
+            f"HTTP {status} - upstream error", city,
+        )
+
+    return _unavailable(
+        "We couldn't reach the weather service. Check your internet "
+        "connection and try again.",
+        f"{type(error).__name__}: {error}", city,
+    )
+
+
+NOT_CONFIGURED_MESSAGE = (
+    "Weather isn't available right now. Your outfit suggestions will "
+    "still work, just without weather."
+)
 
 
 def get_weather(city):
@@ -80,13 +169,17 @@ def get_weather(city):
     """
 
     if not OPENWEATHER_API_KEY:
-        raise RuntimeError(
-            "Weather isn't configured yet - set OPENWEATHER_API_KEY "
-            "in your environment."
+        raise _unavailable(
+            NOT_CONFIGURED_MESSAGE,
+            "OPENWEATHER_API_KEY is not set in this machine's .env",
+            city,
         )
 
     if not city:
-        raise RuntimeError("City is required.")
+        raise _unavailable(
+            "Please choose a city so we can check the weather there.",
+            "no city supplied", "",
+        )
 
     params = urllib.parse.urlencode({
         "q": city,
@@ -106,9 +199,7 @@ def get_weather(city):
 
     except Exception as e:
 
-        raise RuntimeError(
-            f"Could not fetch weather for '{city}': {e}"
-        )
+        raise _describe_failure(e, city)
 
     weather_list = data.get("weather", [{}])
 
@@ -125,6 +216,15 @@ def get_weather(city):
     )
 
     temp_c = data.get("main", {}).get("temp")
+
+    # What the air actually feels like, which is what you dress for:
+    # 30C at 85% humidity is punishing, 30C in dry wind is pleasant,
+    # and 5C with wind chill needs a coat that 5C still air does not.
+    # OpenWeatherMap computes this from temperature, humidity and wind
+    # together, so it is a better single input than raw temperature.
+    # Falls back to temp_c when absent rather than inventing a value.
+    feels_like_c = data.get("main", {}).get("feels_like", temp_c)
+
     humidity_pct = data.get("main", {}).get("humidity")
 
     wind_mps = data.get("wind", {}).get("speed")
@@ -137,18 +237,20 @@ def get_weather(city):
     return {
         "city": data.get("name", city),
         "temp_c": temp_c,
+        "feels_like_c": feels_like_c,
         "condition": condition,
         "description": description,
         "humidity_pct": humidity_pct,
         "wind_kph": wind_kph,
         "is_rainy": condition in RAINY_CONDITIONS,
+        # Judged on feels-like, not raw temperature - see above.
         "is_hot": (
-            temp_c is not None
-            and temp_c >= HOT_THRESHOLD_C
+            feels_like_c is not None
+            and feels_like_c >= HOT_THRESHOLD_C
         ),
         "is_cold": (
-            temp_c is not None
-            and temp_c <= COLD_THRESHOLD_C
+            feels_like_c is not None
+            and feels_like_c <= COLD_THRESHOLD_C
         ),
         "is_windy": (
             wind_kph is not None
@@ -222,13 +324,17 @@ def get_weather_forecast(city):
     """
 
     if not OPENWEATHER_API_KEY:
-        raise RuntimeError(
-            "Weather isn't configured yet - set OPENWEATHER_API_KEY "
-            "in your environment."
+        raise _unavailable(
+            NOT_CONFIGURED_MESSAGE,
+            "OPENWEATHER_API_KEY is not set in this machine's .env",
+            city,
         )
 
     if not city:
-        raise RuntimeError("City is required.")
+        raise _unavailable(
+            "Please choose a city so we can check the weather there.",
+            "no city supplied", "",
+        )
 
     params = urllib.parse.urlencode({
         "q": city,
@@ -248,9 +354,7 @@ def get_weather_forecast(city):
 
     except Exception as e:
 
-        raise RuntimeError(
-            f"Could not fetch weather forecast for '{city}': {e}"
-        )
+        raise _describe_failure(e, city)
 
     resolved_city = data.get("city", {}).get("name", city)
 
@@ -286,6 +390,33 @@ def get_weather_forecast(city):
         temp_c = sum(temps) / len(temps)
         temp_min_c = min(temps)
         temp_max_c = max(temps)
+
+        # "pop" is OpenWeatherMap's probability of precipitation for
+        # each 3-hour block, 0-1. The MAX across a day is what matters
+        # for dressing: a 70% chance at 5pm means take a jacket, even
+        # if the day averages 20%. Absent on some responses, in which
+        # case the field stays None rather than being guessed at.
+        precipitation_probabilities = [
+            entry["pop"]
+            for entry in entries
+            if isinstance(entry.get("pop"), (int, float))
+        ]
+        rain_chance_pct = (
+            round(max(precipitation_probabilities) * 100)
+            if precipitation_probabilities
+            else None
+        )
+
+        feels_like_values = [
+            entry["main"]["feels_like"]
+            for entry in entries
+            if entry.get("main", {}).get("feels_like") is not None
+        ]
+        feels_like_c = (
+            round(sum(feels_like_values) / len(feels_like_values), 1)
+            if feels_like_values
+            else None
+        )
 
         humidities = [
             entry["main"]["humidity"]
@@ -338,13 +469,20 @@ def get_weather_forecast(city):
         by_date[date_key] = {
             "city": resolved_city,
             "temp_c": round(temp_c, 1),
+            "feels_like_c": feels_like_c,
+            "rain_chance_pct": rain_chance_pct,
             "temp_min_c": round(temp_min_c, 1),
             "temp_max_c": round(temp_max_c, 1),
             "condition": condition,
             "description": description,
             "humidity_pct": humidity_pct,
             "wind_kph": wind_kph,
-            "is_rainy": is_rainy,
+            # Either an actual rainy reading, or a probability high
+            # enough that you would take a jacket anyway.
+            "is_rainy": is_rainy or (
+                rain_chance_pct is not None
+                and rain_chance_pct >= RAIN_LIKELY_PCT
+            ),
             "is_hot": temp_max_c >= HOT_THRESHOLD_C,
             "is_cold": temp_max_c <= COLD_THRESHOLD_C,
             "is_windy": (

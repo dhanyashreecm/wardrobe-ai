@@ -398,3 +398,232 @@ def detect_dominant_color(image_path):
         garment_rgb = _average_rgb(pixels)
 
     return _nearest_reference_color(garment_rgb)
+
+
+# ============================================================
+# SECONDARY COLOURS AND PATTERN
+#
+# detect_dominant_color() above answers "what colour is this?" with a
+# single name, which is right for the wardrobe's colour field and for
+# colour-harmony scoring. It is not the whole truth about a striped
+# shirt or a floral skirt, and calling one of those "cream" hides
+# something the user can see plainly in the photo.
+#
+# detect_colors() answers the fuller question - a dominant colour, any
+# genuinely present secondary colour, and whether the garment looks
+# patterned - WITHOUT pretending to more than pixels can support. It
+# does not name the pattern (floral vs geometric is not something
+# colour clustering can tell apart); it only reports that the garment
+# is not a single flat colour, which is an honest and useful thing to
+# record.
+#
+# Method: the garment pixels are split into three clusters instead of
+# two. If the second cluster is both LARGE enough to be a real part of
+# the garment and FAR enough from the first to be a different colour
+# name, it is reported as a secondary colour. Spread across the
+# clusters is what flags a pattern: a plain garment's pixels sit close
+# together whatever the lighting, while a print scatters them.
+# ============================================================
+
+# A second colour must cover at least this share of the garment before
+# it counts. Below it, it is a shadow, a fold, a button or a logo -
+# not something anyone would describe as part of the garment's colour.
+_SECONDARY_MIN_SHARE = 0.18
+
+# ...and it must be at least this far from the dominant colour in RGB
+# terms, otherwise "navy and slightly darker navy" would be reported
+# as two colours.
+_SECONDARY_MIN_DISTANCE = 45 ** 2
+
+# How much spread across the garment's pixels counts as a pattern
+# rather than shading. Set from the observation that a plain garment
+# photographed with normal lighting keeps its clusters within roughly
+# 35 RGB units of each other, while stripes or prints push well past.
+_PATTERN_SPREAD = 55 ** 2
+
+
+def _kmeans(pixels, k, iterations=8):
+    """
+    Small k-means over RGB, seeded by picking the points that are
+    furthest apart (k-means++ in spirit), so the clusters do not
+    depend on which pixel happens to come first.
+
+    Returns [(centroid, member_count), ...], largest cluster first.
+    """
+    if not pixels:
+        return []
+
+    centroids = [pixels[0]]
+
+    while len(centroids) < k:
+        furthest = max(
+            pixels,
+            key=lambda pixel: min(
+                _squared_distance(pixel, centroid) for centroid in centroids
+            ),
+        )
+        if furthest in centroids:
+            break
+        centroids.append(furthest)
+
+    groups = [[] for _ in centroids]
+
+    for _ in range(iterations):
+
+        groups = [[] for _ in centroids]
+
+        for pixel in pixels:
+            nearest = min(
+                range(len(centroids)),
+                key=lambda index: _squared_distance(pixel, centroids[index]),
+            )
+            groups[nearest].append(pixel)
+
+        moved = False
+
+        for index, group in enumerate(groups):
+            if not group:
+                continue
+            new_centroid = _average_rgb(group)
+            if _squared_distance(new_centroid, centroids[index]) > 1:
+                moved = True
+            centroids[index] = new_centroid
+
+        if not moved:
+            break
+
+    result = [
+        (centroids[index], len(group))
+        for index, group in enumerate(groups)
+        if group
+    ]
+
+    result.sort(key=lambda pair: pair[1], reverse=True)
+
+    return result
+
+
+def detect_colors(image_path):
+    """
+    Fuller colour reading for one garment photo:
+
+        {
+            "primary": "navy",
+            "secondary": ["cream"],     # [] when it is a plain garment
+            "is_patterned": True,       # multi-coloured/printed
+            "confidence": "high"        # how separable the garment was
+        }
+
+    Returns None if the image cannot be read at all - the caller
+    should treat that as "unknown", never as "plain black".
+
+    "primary" always matches what detect_dominant_color() would
+    return, so the stored colour field and colour-harmony scoring stay
+    exactly as they were; this only adds information alongside.
+    """
+
+    try:
+        image = Image.open(image_path).convert("RGB")
+    except Exception as error:
+        print(f"Colour analysis skipped - could not read image: {error}")
+        return None
+
+    image = image.resize((80, 80))
+
+    pixels = list(image.getdata())
+
+    backdrop_rgb = _sample_backdrop_color(image)
+
+    # Garment pixels are taken from the CENTRE of the frame rather
+    # than by "everything unlike the backdrop".
+    #
+    # The distance test is the obvious approach and it is wrong here:
+    # it throws away any part of the garment whose colour happens to
+    # resemble the backdrop, so a navy-and-cream skirt photographed on
+    # pale grey loses its cream half entirely and gets reported as
+    # plain navy. Cropping instead relies on the assumption this whole
+    # module already documents and the app's crop tool already
+    # encourages - one garment, roughly centred - and keeps every
+    # colour the garment actually has.
+    width, height = image.size
+    margin_x, margin_y = int(width * 0.25), int(height * 0.25)
+
+    garment_pixels = [
+        image.getpixel((x, y))
+        for x in range(margin_x, width - margin_x)
+        for y in range(margin_y, height - margin_y)
+    ]
+
+    if not garment_pixels:
+        garment_pixels = pixels
+
+    clusters = _kmeans(garment_pixels, 3)
+
+    if not clusters:
+        return None
+
+    total = sum(count for _, count in clusters)
+
+    primary_rgb, primary_count = clusters[0]
+    primary = _nearest_reference_color(primary_rgb)
+
+    secondary = []
+
+    for centroid, count in clusters[1:]:
+
+        share = count / total
+
+        if share < _SECONDARY_MIN_SHARE:
+            continue
+
+        if _squared_distance(centroid, primary_rgb) < _SECONDARY_MIN_DISTANCE:
+            continue
+
+        name = _nearest_reference_color(centroid)
+
+        if name and name != primary and name not in secondary:
+            secondary.append(name)
+
+    # Spread between the extreme clusters is what separates a print
+    # from shading on a plain garment - but only across clusters big
+    # enough to be part of the garment.
+    #
+    # Without that restriction, the handful of half-garment,
+    # half-backdrop pixels along the edge of any photo form their own
+    # small cluster, sitting far from the real colour, and every plain
+    # garment gets reported as patterned. A pattern has to occupy a
+    # real share of the garment, not a one-pixel outline.
+    substantial = [
+        (centroid, count) for centroid, count in clusters
+        if count / total >= _SECONDARY_MIN_SHARE
+    ]
+
+    spread = max(
+        (
+            _squared_distance(a[0], b[0])
+            for a in substantial for b in substantial
+        ),
+        default=0,
+    )
+
+    # A garment barely distinguishable from its backdrop (a white
+    # shirt on white) may simply BE that colour - but we cannot tell
+    # the garment from the background, so the reading is honest about
+    # being less certain rather than silently confident.
+    hard_to_separate = (
+        _squared_distance(primary_rgb, backdrop_rgb) < _SECONDARY_MIN_DISTANCE
+    )
+
+    if hard_to_separate:
+        confidence = "low"
+    elif primary_count / total > 0.5:
+        confidence = "high"
+    else:
+        confidence = "medium"
+
+    return {
+        "primary": primary,
+        "secondary": secondary,
+        "is_patterned": bool(secondary) or spread > _PATTERN_SPREAD,
+        "confidence": confidence,
+    }

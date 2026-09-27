@@ -58,7 +58,9 @@ function Login() {
 
     try {
       const res = await axios.post(`${API_URL}/api/login`, {
-        email, password
+        // The server normalises too; doing it here keeps what the
+        // user sees consistent with the one account it maps to.
+        email: email.trim().toLowerCase(), password
       });
       if (res.data.success) {
         if (res.data.gender) {
@@ -337,6 +339,10 @@ function Login() {
           </form>
 
           {error && <p className="error">{error}</p>}
+
+          <p className="switch-link" style={{ marginTop: "12px" }}>
+            <Link to="/forgot-password">Forgot password?</Link>
+          </p>
 
           <p className="switch-link">
             Don't have an account? <Link to="/register">Create one →</Link>

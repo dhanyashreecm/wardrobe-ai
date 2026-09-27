@@ -93,3 +93,69 @@ def ping():
         return True, "connected"
     except Exception as error:
         return False, f"{type(error).__name__}: {error}"
+
+
+# ------------------------------------------------------------------
+# INDEXES - the database-level guarantees behind "one email, one
+# account" and "a migration never duplicates an item".
+#
+# Created by the running app at startup (see app.py's __main__) and by
+# the migration/doctor scripts - never at import time, so importing
+# this module (tests, scripts) never needs the network.
+#
+#   users.email            UNIQUE, case-insensitive (collation strength
+#                          2): "Ganga@Gmail.com" and "ganga@gmail.com"
+#                          can never be two accounts, even if two
+#                          registrations race each other.
+#   wardrobe.user_email    ordinary index for the per-account wardrobe
+#   trips.user_email       and trip lookups every page makes.
+#   wardrobe.migrated_from_id
+#                          UNIQUE where present: a local item copied by
+#                          migrate_to_atlas can exist at most once, even
+#                          if the migration is re-run or run twice at once.
+#
+# Returns a list of human-readable problems (empty = all in place).
+# An index that cannot be built because existing data violates it
+# (e.g. two accounts already differ only by case) is reported, not
+# forced - backend.account_doctor explains and repairs that safely.
+# ------------------------------------------------------------------
+
+EMAIL_INDEX_NAME = "email_unique_ci"
+
+
+def ensure_indexes():
+    problems = []
+
+    specs = [
+        (
+            "users",
+            [("email", 1)],
+            {
+                "name": EMAIL_INDEX_NAME,
+                "unique": True,
+                "collation": {"locale": "en", "strength": 2},
+            },
+        ),
+        ("wardrobe", [("user_email", 1)], {"name": "user_email_1"}),
+        ("trips", [("user_email", 1)], {"name": "user_email_1"}),
+        (
+            "wardrobe",
+            [("migrated_from_id", 1)],
+            {
+                "name": "migrated_from_id_unique",
+                "unique": True,
+                "partialFilterExpression": {"migrated_from_id": {"$type": "string"}},
+            },
+        ),
+    ]
+
+    for collection, keys, options in specs:
+        try:
+            db[collection].create_index(keys, **options)
+        except Exception as error:
+            problems.append(
+                f"{collection}.{options['name']}: {type(error).__name__}: "
+                f"{str(error)[:200]}"
+            )
+
+    return problems

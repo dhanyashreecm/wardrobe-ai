@@ -1,11 +1,70 @@
 import bcrypt
-from datetime import datetime
+import secrets
+from datetime import datetime, timedelta
+from pymongo.errors import DuplicateKeyError
+
 from backend.db import users_collection
+from backend.identity import normalize_email, email_match_filter
 
 # The only two accepted values, anywhere gender is written. Kept as
 # a single source of truth so register/migrate can't drift apart on
 # what's valid.
 VALID_GENDERS = {"Male", "Female"}
+
+
+# =========================================================
+# ACCOUNT LOOKUP - the one place that finds a user by email
+#
+# Accounts live ONLY in the shared Atlas database (see db.py - there
+# is no local fallback), and an account is identified by its
+# NORMALISED email (see identity.py). Exact match on the normalised
+# form is tried first (fast, uses the unique index); a case-/space-
+# insensitive match is the fallback for accounts stored before
+# normalisation existed, so such an account is still found instead of
+# looking like "no account" and inviting a duplicate registration.
+# =========================================================
+
+def find_user_by_email(email):
+    canonical = normalize_email(email)
+    if not canonical:
+        return None
+    user = users_collection.find_one({"email": canonical})
+    if user:
+        return user
+    return users_collection.find_one(email_match_filter(canonical))
+
+
+def _hash_bytes(stored):
+    """
+    The stored bcrypt hash as bytes, whatever shape it was saved in.
+    Hashes written by this app are BSON binary (bytes), but a record
+    created or edited by another tool (Atlas UI, a script, a JSON
+    import) can hold the same hash as a str - which used to crash
+    bcrypt.checkpw with a TypeError and make a correct password look
+    like a server error. Returns None if there is no usable hash.
+    """
+    if stored is None:
+        return None
+    if isinstance(stored, str):
+        stored = stored.encode("utf-8")
+    try:
+        stored = bytes(stored)
+    except Exception:
+        return None
+    if not stored.startswith((b"$2a$", b"$2b$", b"$2y$")) or len(stored) != 60:
+        return None
+    return stored
+
+
+def check_password(password, stored_hash):
+    """True only when `password` matches the stored bcrypt hash."""
+    hashed = _hash_bytes(stored_hash)
+    if hashed is None or not isinstance(password, str) or not password:
+        return False
+    try:
+        return bcrypt.checkpw(password.encode("utf-8"), hashed)
+    except ValueError:
+        return False
 
 
 def register_user(name, email, password, gender=None):
@@ -29,8 +88,14 @@ def register_user(name, email, password, gender=None):
                         "be changed later."
         }
 
-    existing = users_collection.find_one({"email": email})
-    if existing:
+    email = normalize_email(email)
+
+    if not email or "@" not in email:
+        return {"success": False, "message": "Please enter a valid email address"}
+
+    # Case-insensitive: "Ganga@Gmail.com" must find the existing
+    # "ganga@gmail.com" account rather than create a second one.
+    if find_user_by_email(email):
         return {"success": False, "message": "Email already registered"}
 
     hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt())
@@ -43,20 +108,42 @@ def register_user(name, email, password, gender=None):
         "created_at": datetime.utcnow()
     }
 
-    users_collection.insert_one(user)
+    try:
+        users_collection.insert_one(user)
+    except DuplicateKeyError:
+        # The unique index (db.ensure_indexes) caught a registration
+        # racing another one for the same address.
+        return {"success": False, "message": "Email already registered"}
     return {"success": True, "message": "Registration successful"}
 
 
 def verify_login(email, password):
-    user = users_collection.find_one({"email": email})
+    """
+    Authenticates against the ONE shared (Atlas) account for this
+    email. The returned "email" is the account's canonical address,
+    which app.py uses as the login token's identity - so every device
+    that logs in to this account gets the same identity, and therefore
+    the same wardrobe, trips and profile.
+    """
+    user = find_user_by_email(email)
     if not user:
         return {"success": False, "message": "No account with this email"}
 
-    if bcrypt.checkpw(password.encode("utf-8"), user["password_hash"]):
+    if _hash_bytes(user.get("password_hash")) is None:
+        # Never silently reset or replace a password here - report it
+        # so the account can be repaired deliberately (password reset).
+        print(f"Login refused: account {user.get('_id')} has no valid password hash")
+        return {
+            "success": False,
+            "message": "This account's password needs to be reset - use "
+                       "'Forgot password' to set a new one.",
+        }
+
+    if check_password(password, user.get("password_hash")):
         return {
             "success": True,
-            "name": user["name"],
-            "email": user["email"],
+            "name": user.get("name"),
+            "email": normalize_email(user.get("email")),
             # None here means a pre-existing account created before
             # gender became mandatory. The frontend treats a missing
             # gender as "needs one-time setup" (see Login.js) rather
@@ -79,7 +166,7 @@ def get_user_profile(email):
     happen for a valid JWT, but callers should treat None as a 404,
     not assume a dict back).
     """
-    user = users_collection.find_one({"email": email})
+    user = find_user_by_email(email)
 
     if not user:
         return None
@@ -135,7 +222,11 @@ def update_user_profile(email, name=None, phone=None, city=None):
     if not set_fields:
         return {"success": False, "message": "Nothing to update"}
 
-    users_collection.update_one({"email": email}, {"$set": set_fields})
+    user = find_user_by_email(email)
+    if not user:
+        return {"success": False, "message": "No account with this email"}
+
+    users_collection.update_one({"_id": user["_id"]}, {"$set": set_fields})
 
     return {"success": True}
 
@@ -146,9 +237,11 @@ def set_profile_picture(email, picture_url):
     app.py's /api/user/profile/picture route, which does the actual
     file handling - this just points the account at the result).
     """
-    users_collection.update_one(
-        {"email": email}, {"$set": {"profile_picture": picture_url}}
-    )
+    user = find_user_by_email(email)
+    if user:
+        users_collection.update_one(
+            {"_id": user["_id"]}, {"$set": {"profile_picture": picture_url}}
+        )
 
 
 def delete_user_account(email):
@@ -164,7 +257,10 @@ def delete_user_account(email):
     Returns False if there was no such account, so the caller can
     turn that into a 404 instead of a silent success.
     """
-    result = users_collection.delete_one({"email": email})
+    user = find_user_by_email(email)
+    if not user:
+        return False
+    result = users_collection.delete_one({"_id": user["_id"]})
     return result.deleted_count > 0
 
 
@@ -175,7 +271,7 @@ def get_user_gender(email):
     recommendations.
     """
 
-    user = users_collection.find_one({"email": email})
+    user = find_user_by_email(email)
     return (user or {}).get("gender")
 
 
@@ -199,7 +295,7 @@ def migrate_user_gender(email, gender):
             "message": 'Please choose "Male" or "Female".'
         }
 
-    user = users_collection.find_one({"email": email})
+    user = find_user_by_email(email)
 
     if not user:
         return {"success": False, "message": "No account with this email"}
@@ -211,8 +307,85 @@ def migrate_user_gender(email, gender):
         }
 
     users_collection.update_one(
-        {"email": email},
+        {"_id": user["_id"]},
         {"$set": {"gender": gender}}
     )
 
     return {"success": True, "gender": gender}
+
+
+# =========================================================
+# FORGOT PASSWORD (6-digit code sent by email)
+#
+# The code itself is never stored - only its bcrypt hash, exactly
+# like a password. It expires after RESET_CODE_MINUTES, allows only
+# RESET_MAX_ATTEMPTS wrong guesses, and is wiped once used.
+# =========================================================
+
+RESET_CODE_MINUTES = 15
+RESET_MAX_ATTEMPTS = 5
+RESET_RESEND_SECONDS = 60
+MIN_PASSWORD_LENGTH = 6
+
+
+def create_password_reset_code(email):
+    """
+    Returns {"status": "ok", "code", "name"} when a code was made,
+    {"status": "no_account"} or {"status": "too_soon"} otherwise.
+    The route never tells the browser which of these happened, so the
+    form can't be used to find out which emails have accounts.
+    """
+    user = find_user_by_email(email)
+    if not user:
+        return {"status": "no_account"}
+
+    now = datetime.utcnow()
+    last = user.get("reset_requested_at")
+    if last and (now - last).total_seconds() < RESET_RESEND_SECONDS:
+        return {"status": "too_soon"}
+
+    code = f"{secrets.randbelow(1000000):06d}"
+    users_collection.update_one(
+        {"_id": user["_id"]},
+        {"$set": {
+            "reset_code_hash": bcrypt.hashpw(code.encode("utf-8"), bcrypt.gensalt()),
+            "reset_expires_at": now + timedelta(minutes=RESET_CODE_MINUTES),
+            "reset_attempts": 0,
+            "reset_requested_at": now,
+        }}
+    )
+    return {"status": "ok", "code": code, "name": user.get("name")}
+
+
+def reset_password_with_code(email, code, new_password):
+    if not new_password or len(new_password) < MIN_PASSWORD_LENGTH:
+        return {"success": False,
+                "message": f"New password must be at least {MIN_PASSWORD_LENGTH} characters"}
+
+    user = find_user_by_email(email)
+    invalid = {"success": False, "message": "Invalid or expired code. Request a new one."}
+
+    if not user or not user.get("reset_code_hash"):
+        return invalid
+
+    if datetime.utcnow() > user.get("reset_expires_at", datetime.min):
+        return invalid
+
+    if user.get("reset_attempts", 0) >= RESET_MAX_ATTEMPTS:
+        return {"success": False,
+                "message": "Too many wrong codes. Request a new one."}
+
+    if not check_password(str(code).strip(), user["reset_code_hash"]):
+        users_collection.update_one({"_id": user["_id"]}, {"$inc": {"reset_attempts": 1}})
+        left = RESET_MAX_ATTEMPTS - user.get("reset_attempts", 0) - 1
+        return {"success": False,
+                "message": f"Wrong code. {left} attempt(s) left." if left > 0
+                           else "Too many wrong codes. Request a new one."}
+
+    users_collection.update_one(
+        {"_id": user["_id"]},
+        {"$set": {"password_hash": bcrypt.hashpw(new_password.encode("utf-8"), bcrypt.gensalt())},
+         "$unset": {"reset_code_hash": "", "reset_expires_at": "",
+                    "reset_attempts": "", "reset_requested_at": ""}}
+    )
+    return {"success": True, "message": "Password changed. You can log in now."}

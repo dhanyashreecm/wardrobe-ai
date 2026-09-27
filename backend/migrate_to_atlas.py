@@ -3,53 +3,64 @@ ONE-TIME MIGRATION: this computer's local database and images ->
 the shared MongoDB Atlas database and Cloudinary.
 
 Each laptop that used Wardrobe-AI before the centralisation change has
-its own local "wardrobe_db" full of real accounts, wardrobe items and
-trips, plus the actual image files under backend/uploads/. This script
-copies all of that into the shared setup so nothing has to be typed in
-again.
+its own local "wardrobe_db" full of real wardrobe items and trips,
+plus the actual image files under backend/uploads/. This script copies
+them into the shared setup so nothing has to be typed in again.
+
+RECOMMENDED: migrate ONE account at a time
+------------------------------------------
+    python -m backend.migrate_to_atlas --only-email you@gmail.com --dry-run
+    python -m backend.migrate_to_atlas --only-email you@gmail.com
+
+With --only-email:
+  * the account must ALREADY exist in Atlas - it is never created,
+    and its password, name and profile are never touched;
+  * only that account's wardrobe items and trips are copied (matched
+    case-insensitively), and they are attached to the Atlas account's
+    canonical email - which is exactly what the app uses to decide
+    whose wardrobe an item is;
+  * no other account on this computer is copied anywhere.
 
 WHAT IT WILL NOT DO
 -------------------
-  * It never deletes or edits the local database. The source is opened
-    read-only in practice - the only writes go to the destination.
-  * It never deletes local image files.
-  * It never guesses who an item belongs to. An item whose owner has
-    no matching account is imported with its user_email replaced by
-    LEGACY_UNASSIGNED so it is preserved but attributed to nobody, and
-    every such item is listed in the summary.
-  * It never overwrites an account that already exists in the shared
-    database - if the same email registered on both laptops, the copy
-    already in Atlas wins and the local one is reported as skipped.
+  * It never deletes or edits the local database or local image files.
+  * It never writes a local path ("/api/uploads/...") into Atlas. An
+    item whose image file is missing, or whose Cloudinary upload
+    fails, is NOT inserted at all - it is listed, and a re-run picks
+    it up once the problem is fixed. Every migrated item therefore
+    points at an https Cloudinary URL.
+  * It never overwrites an account that already exists in Atlas.
+  * It never guesses an owner (full-machine mode only: items whose
+    owner has no account are parked under LEGACY_UNASSIGNED).
 
-SAFE TO RUN TWICE
------------------
-Re-running does not duplicate anything. Users are matched by email.
-Wardrobe items and trips carry their original local _id in a
-"migrated_from_id" field, which is what the script checks before
-inserting - so an interrupted run can simply be run again, and only
-what is genuinely missing gets copied.
+SAFE TO RUN TWICE (idempotent)
+------------------------------
+  * Every copied row carries "migrated_from_id" (its local _id), and
+    Atlas has a UNIQUE index on it (db.ensure_indexes) - so a row can
+    never be inserted twice, even by two runs at once.
+  * The Cloudinary public_id is derived from that same id, so an
+    image uploaded by an interrupted run is reused, not re-uploaded.
+  * An item whose exact photo (SHA-256 of the file) is already in that
+    account's cloud wardrobe is skipped as a duplicate - this is what
+    stops a second machine's copy of the same wardrobe doubling it.
 
-USAGE (from the project root, with the virtualenv active and .env
-already pointing at the shared database):
-
-    # See exactly what WOULD happen - writes nothing, uploads nothing:
+FULL-MACHINE MODE (the original behaviour, all accounts):
     python -m backend.migrate_to_atlas --dry-run
-
-    # Do it:
     python -m backend.migrate_to_atlas
-
-    # If the old data lives somewhere other than the default:
-    python -m backend.migrate_to_atlas \
-        --source-uri mongodb://localhost:27017/ --source-db wardrobe_db
 """
 
 import argparse
+import hashlib
 import os
+import socket
 import sys
+from datetime import datetime
 
 from pymongo import MongoClient
+from pymongo.errors import DuplicateKeyError
 
 from backend import config, storage
+from backend.identity import normalize_email, email_match_filter
 
 
 LEGACY_UNASSIGNED = "legacy_unassigned"
@@ -60,13 +71,11 @@ DEFAULT_SOURCE_DB = "wardrobe_db"
 
 def local_path_for(image_path):
     """
-    Turns a stored image reference into a real path on this disk, or
-    None when there is nothing local to upload.
+    A stored image reference -> a real file on this disk, or None.
 
-    Old rows hold "/api/uploads/<folder>/<file>", which maps directly
-    onto backend/uploads/<folder>/<file>. A row that already holds an
-    https URL has been migrated (or was uploaded after the change) and
-    needs no work.
+    Old rows hold "/api/uploads/<folder>/<file>", which maps onto
+    backend/uploads/<folder>/<file>. A row that already holds an https
+    URL needs no upload.
     """
     if not image_path or storage.is_remote_url(image_path):
         return None
@@ -78,39 +87,69 @@ def local_path_for(image_path):
             relative = relative[len(prefix):]
             break
 
-    candidate = os.path.join(storage.BASE_UPLOAD_FOLDER, relative)
+    candidate = os.path.normpath(os.path.join(storage.BASE_UPLOAD_FOLDER, relative))
+
+    # Never follow a stored path out of the uploads folder.
+    if not candidate.startswith(os.path.normpath(storage.BASE_UPLOAD_FOLDER) + os.sep):
+        return None
 
     return candidate if os.path.isfile(candidate) else None
 
 
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def new_report():
+    return {
+        "users_migrated": 0,
+        "users_already_present": 0,
+        "users_skipped_no_email": 0,
+        "wardrobe_source": 0,
+        "wardrobe_migrated": 0,
+        "wardrobe_already_present": 0,
+        "wardrobe_duplicate_photo": 0,
+        "trips_source": 0,
+        "trips_migrated": 0,
+        "trips_already_present": 0,
+        "images_uploaded": 0,
+        "images_to_upload": 0,
+        "images_missing_on_disk": [],
+        "image_failures": [],
+        "unassigned": [],
+    }
+
+
 def migrate_users(source_db, destination_db, report, dry_run):
+    """Full-machine mode only. Never touches an account already in Atlas."""
+    from backend.auth import find_user_by_email
 
-    source_users = list(source_db["users"].find({}))
+    for user in source_db["users"].find({}):
 
-    destination_users = destination_db["users"]
-
-    for user in source_users:
-
-        email = user.get("email")
+        email = normalize_email(user.get("email"))
 
         if not email:
             report["users_skipped_no_email"] += 1
             continue
 
-        if destination_users.find_one({"email": email}):
+        if find_user_by_email(email):
             report["users_already_present"] += 1
             continue
 
         document = dict(user)
-
-        # The local _id is dropped so the shared database assigns its
-        # own, but it is remembered: wardrobe rows reference their
-        # owner by EMAIL, not by _id, so nothing breaks - and keeping
-        # it makes the migration auditable afterwards.
+        document["email"] = email
         document["migrated_from_id"] = str(document.pop("_id", ""))
 
         if not dry_run:
-            destination_users.insert_one(document)
+            try:
+                destination_db["users"].insert_one(document)
+            except DuplicateKeyError:
+                report["users_already_present"] += 1
+                continue
 
         report["users_migrated"] += 1
 
@@ -119,20 +158,36 @@ def migrate_collection(
     name,
     source_db,
     destination_db,
-    known_emails,
     report,
     dry_run,
     upload_images,
+    owner_resolver,
+    source_filter,
 ):
     """
-    Copies one owned collection ("wardrobe" or "trips"). Shared by
-    both because the ownership and de-duplication rules are identical;
-    only wardrobe rows carry an image, which upload_images controls.
+    Copies one owned collection ("wardrobe" or "trips").
+
+    owner_resolver(raw_email) -> the canonical Atlas email to store as
+    user_email, or None when the owner has no account.
     """
-
-    source_rows = list(source_db[name].find({}))
-
     destination = destination_db[name]
+    source_rows = list(source_db[name].find(source_filter))
+    report[f"{name}_source"] = len(source_rows)
+
+    # Photos already in each owner's cloud wardrobe, for the
+    # duplicate-photo check. Loaded lazily per owner.
+    known_hashes = {}
+
+    def hashes_for(owner):
+        if owner not in known_hashes:
+            known_hashes[owner] = {
+                row.get("image_sha256")
+                for row in destination.find(
+                    {"user_email": owner, "image_sha256": {"$exists": True}},
+                    {"image_sha256": 1},
+                )
+            }
+        return known_hashes[owner]
 
     for row in source_rows:
 
@@ -144,226 +199,314 @@ def migrate_collection(
 
         document = dict(row)
         document.pop("_id", None)
+        document.pop("local_image_path", None)
         document["migrated_from_id"] = original_id
+        document["migrated_at"] = datetime.utcnow()
+        document["migrated_from_host"] = socket.gethostname()
 
-        owner = document.get("user_email")
+        raw_owner = document.get("user_email")
+        owner = owner_resolver(raw_owner)
 
-        # No guessing: an orphaned row keeps all of its data but is
-        # parked under a reserved owner nobody can log in as, so it is
-        # never shown to - or deletable by - the wrong person.
-        if not owner or owner not in known_emails:
-            document["original_user_email"] = owner or ""
-            document["user_email"] = LEGACY_UNASSIGNED
-            report["unassigned"].append(
-                f"{name}: {original_id} (owner: {owner or 'missing'})"
-            )
+        if owner is None:
+            document["original_user_email"] = raw_owner or ""
+            owner = LEGACY_UNASSIGNED
+            report["unassigned"].append(f"{name}: {original_id} (owner: {raw_owner or 'missing'})")
+
+        document["user_email"] = owner
 
         if upload_images:
 
-            source_path = local_path_for(document.get("image_path"))
+            stored = document.get("image_path")
+            source_path = local_path_for(stored)
+
+            if stored and not storage.is_remote_url(stored) and not source_path:
+                # The file is not on this computer. Inserting the row
+                # would put a dead local path into the cloud database,
+                # so it is skipped and listed instead.
+                report["images_missing_on_disk"].append(f"{original_id}: {stored}")
+                continue
 
             if source_path:
 
+                photo_hash = file_sha256(source_path)
+                document["image_sha256"] = photo_hash
+
+                if photo_hash in hashes_for(owner):
+                    report[f"{name}_duplicate_photo"] += 1
+                    continue
+
                 if dry_run:
                     report["images_to_upload"] += 1
+                    hashes_for(owner).add(photo_hash)
+                    report[f"{name}_migrated"] += 1
+                    continue
 
-                else:
-                    try:
-                        document["local_image_path"] = document.get("image_path")
+                try:
+                    document["image_path"] = storage.upload_local_file(
+                        source_path,
+                        owner,
+                        kind="wardrobe",
+                        public_id=f"migrated_{original_id}",
+                    )
+                    document["image_public_id"] = (
+                        f"ai-wardrobe/{storage.user_folder_key(owner)}/wardrobe/"
+                        f"migrated_{original_id}"
+                    )
+                    report["images_uploaded"] += 1
+                except storage.StorageError as error:
+                    report["image_failures"].append(f"{original_id}: {error}")
+                    continue
 
-                        document["image_path"] = storage.upload_local_file(
-                            source_path,
-                            document.get("user_email") or LEGACY_UNASSIGNED,
-                            kind="wardrobe",
-                        )
+                if not storage.is_remote_url(document["image_path"]):
+                    report["image_failures"].append(f"{original_id}: upload returned no https URL")
+                    continue
 
-                        report["images_uploaded"] += 1
-
-                    except storage.StorageError as error:
-                        # The row is still migrated - losing the
-                        # metadata would be worse than an item whose
-                        # picture needs re-uploading by hand later.
-                        report["image_failures"].append(
-                            f"{original_id}: {error}"
-                        )
-
-            elif document.get("image_path") and not storage.is_remote_url(
-                document.get("image_path")
-            ):
-                report["images_missing_on_disk"].append(
-                    f"{original_id}: {document.get('image_path')}"
-                )
+                hashes_for(owner).add(photo_hash)
 
         if not dry_run:
-            destination.insert_one(document)
+            try:
+                destination.insert_one(document)
+            except DuplicateKeyError:
+                report[f"{name}_already_present"] += 1
+                continue
 
         report[f"{name}_migrated"] += 1
 
 
-def main():
+def verify_owner(destination_db, email, check_urls=True):
+    """
+    Re-reads Atlas (never trusts the migration's own counters) and
+    returns (ok, lines) describing one account's cloud data.
+    """
+    from backend.auth import find_user_by_email
 
-    parser = argparse.ArgumentParser(description=__doc__)
+    lines = []
+    ok = True
 
-    parser.add_argument(
-        "--source-uri",
-        default=DEFAULT_SOURCE_URI,
-        help=f"Local MongoDB to read from (default: {DEFAULT_SOURCE_URI})",
-    )
-    parser.add_argument(
-        "--source-db",
-        default=DEFAULT_SOURCE_DB,
-        help=f"Local database name (default: {DEFAULT_SOURCE_DB})",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Report what would be migrated without writing or uploading.",
-    )
-    parser.add_argument(
-        "--skip-images",
-        action="store_true",
-        help="Migrate database rows only, leaving image paths untouched.",
-    )
+    accounts = list(destination_db["users"].find(email_match_filter(email), {"_id": 1, "email": 1}))
+    lines.append(f"Accounts for this email      : {len(accounts)}")
+    if len(accounts) != 1:
+        ok = False
+        lines.append("  PROBLEM: expected exactly one account")
 
-    args = parser.parse_args()
+    user = find_user_by_email(email)
+    if not user:
+        return False, lines
 
-    # The destination comes from .env - the same configuration the app
-    # itself uses - so this can never migrate into a different place
-    # than the one the app will read from.
+    owner = normalize_email(user.get("email"))
+    lines.append(f"Account id                   : {user['_id']}")
+
+    items = list(destination_db["wardrobe"].find({"user_email": owner}))
+    stray = destination_db["wardrobe"].count_documents(
+        {"$and": [email_match_filter(owner, "user_email"), {"user_email": {"$ne": owner}}]}
+    )
+    remote = [i for i in items if str(i.get("image_path", "")).startswith("https://")]
+    local = [i for i in items if i.get("image_path") and not storage.is_remote_url(i.get("image_path"))]
+    migrated = [i for i in items if i.get("migrated_from_id")]
+    origin_ids = [i["migrated_from_id"] for i in migrated]
+    hashes = [i.get("image_sha256") for i in items if i.get("image_sha256")]
+
+    lines.append(f"Wardrobe items               : {len(items)}")
+    lines.append(f"  of which migrated          : {len(migrated)}")
+    lines.append(f"  with https cloud image URL : {len(remote)}")
+    lines.append(f"  with a LOCAL image path    : {len(local)}")
+    lines.append(f"  duplicate migrations       : {len(origin_ids) - len(set(origin_ids))}")
+    lines.append(f"  duplicate photos           : {len(hashes) - len(set(hashes))}")
+    lines.append(f"  missing category           : {sum(1 for i in items if not i.get('category'))}")
+    lines.append(f"Items under a mis-cased email: {stray}")
+    lines.append(f"Trips                        : {destination_db['trips'].count_documents({'user_email': owner})}")
+
+    if local or stray or len(origin_ids) != len(set(origin_ids)):
+        ok = False
+
+    if check_urls and remote:
+        import urllib.request
+
+        loaded = 0
+        failed = []
+        for item in remote:
+            try:
+                request = urllib.request.Request(item["image_path"], method="HEAD")
+                with urllib.request.urlopen(request, timeout=15) as response:
+                    if response.status == 200:
+                        loaded += 1
+                        continue
+            except Exception as error:  # noqa: BLE001
+                failed.append(f"{item['_id']}: {type(error).__name__}")
+                continue
+            failed.append(str(item["_id"]))
+        lines.append(f"Cloud image URLs that load   : {loaded}/{len(remote)}")
+        if failed:
+            ok = False
+            lines.extend(f"  did not load: {f}" for f in failed[:10])
+
+    return ok, lines
+
+
+def main(argv=None):
+
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--source-uri", default=DEFAULT_SOURCE_URI)
+    parser.add_argument("--source-db", default=DEFAULT_SOURCE_DB)
+    parser.add_argument("--only-email", default=None,
+                        help="Migrate ONLY this account's items and trips into its existing Atlas account.")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Report what would be migrated without writing or uploading.")
+    parser.add_argument("--verify-only", action="store_true",
+                        help="With --only-email: just report that account's cloud state.")
+    parser.add_argument("--skip-images", action="store_true",
+                        help="Full-machine mode only: copy rows without images (NOT for real migrations).")
+    args = parser.parse_args(argv)
+
     config.validate(strict=True)
 
+    from backend.db import db as destination_db, ping as ping_destination, ensure_indexes
+    from backend.auth import find_user_by_email
+
+    ok, detail = ping_destination()
+    if not ok:
+        print(f"Could not connect to the shared database: {detail}")
+        return 1
+
+    only_email = normalize_email(args.only_email) if args.only_email else None
+
+    if args.verify_only:
+        if not only_email:
+            print("--verify-only needs --only-email")
+            return 1
+        passed, lines = verify_owner(destination_db, only_email)
+        print("\n".join(lines))
+        print("\nVerification passed." if passed else "\nVerification found problems (see above).")
+        return 0 if passed else 1
+
     if config.MONGODB_URI.strip().rstrip("/") == args.source_uri.strip().rstrip("/"):
-        print(
-            "Source and destination are the same database - nothing to "
-            "migrate. Point MONGODB_URI in .env at the shared Atlas cluster "
-            "first."
-        )
+        print("Source and destination are the same database - point MONGODB_URI in .env at Atlas first.")
+        return 1
+
+    if only_email and args.skip_images:
+        print("--skip-images is not allowed with --only-email: it would leave local paths in Atlas.")
         return 1
 
     upload_images = not args.skip_images
 
     if upload_images and not config.cloudinary_configured():
-        print(
-            "Cloudinary is not configured, so images cannot be migrated.\n"
-            "Either set CLOUDINARY_CLOUD_NAME / CLOUDINARY_API_KEY / "
-            "CLOUDINARY_API_SECRET in .env, or re-run with --skip-images to "
-            "migrate the database rows only."
-        )
+        print("Cloudinary is not configured (CLOUDINARY_* in .env), so images cannot be migrated.")
+        return 1
+
+    # Uniqueness guarantees must be in place BEFORE anything is copied.
+    problems = ensure_indexes()
+    for problem in problems:
+        print(f"WARNING: index not in place - {problem}")
+    if only_email and any("migrated_from_id" in p for p in problems):
+        print("Stopping: the duplicate-protection index could not be created.")
         return 1
 
     source_client = MongoClient(args.source_uri, serverSelectionTimeoutMS=8000)
-
     try:
         source_client.admin.command("ping")
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001
         print(f"Could not connect to the local database at {args.source_uri}: {error}")
         return 1
-
     source_db = source_client[args.source_db]
 
-    from backend.db import db as destination_db, ping as ping_destination
-
-    ok, detail = ping_destination()
-
-    if not ok:
-        print(f"Could not connect to the shared database: {detail}")
-        return 1
-
-    report = {
-        "users_migrated": 0,
-        "users_already_present": 0,
-        "users_skipped_no_email": 0,
-        "wardrobe_migrated": 0,
-        "wardrobe_already_present": 0,
-        "trips_migrated": 0,
-        "trips_already_present": 0,
-        "images_uploaded": 0,
-        "images_to_upload": 0,
-        "images_missing_on_disk": [],
-        "image_failures": [],
-        "unassigned": [],
-    }
+    report = new_report()
 
     print(f"Source      : {args.source_uri} / {args.source_db}")
     print(f"Destination : {config.safe_mongo_host()} / {config.MONGODB_DB_NAME}")
+    print(f"Account     : {only_email or 'ALL accounts on this computer'}")
     print(f"Images      : {'skipped' if not upload_images else 'uploaded to Cloudinary'}")
     print(f"Mode        : {'DRY RUN (nothing is written)' if args.dry_run else 'LIVE'}")
     print()
 
-    migrate_users(source_db, destination_db, report, args.dry_run)
+    if only_email:
 
-    # Built AFTER the user migration so accounts copied in this same
-    # run count as known owners, not as orphans.
-    known_emails = {
-        user.get("email")
-        for user in destination_db["users"].find({}, {"email": 1})
-        if user.get("email")
-    }
+        account = find_user_by_email(only_email)
+        if not account:
+            print(f"No Atlas account exists for {only_email}. Nothing was migrated.")
+            print("(This script never creates the account - register it in the app first.)")
+            return 1
 
-    if args.dry_run:
-        known_emails |= {
-            user.get("email")
-            for user in source_db["users"].find({}, {"email": 1})
-            if user.get("email")
+        canonical = normalize_email(account.get("email"))
+        print(f"Atlas account found: id {account['_id']} - it will not be modified.\n")
+
+        def owner_resolver(_raw):
+            return canonical
+
+        source_filter = email_match_filter(only_email, "user_email")
+
+        files_here = 0
+        folder = os.path.join(storage.BASE_UPLOAD_FOLDER, f"{only_email.split('@')[0]}_digital_wardrobe")
+        if os.path.isdir(folder):
+            files_here = sum(1 for n in os.listdir(folder) if os.path.isfile(os.path.join(folder, n)))
+        print(f"Local image files in {os.path.basename(folder)}: {files_here}")
+
+    else:
+        migrate_users(source_db, destination_db, report, args.dry_run)
+
+        known = {
+            normalize_email(u.get("email"))
+            for u in destination_db["users"].find({}, {"email": 1})
+            if u.get("email")
         }
+        if args.dry_run:
+            known |= {normalize_email(u.get("email")) for u in source_db["users"].find({}, {"email": 1}) if u.get("email")}
 
-    migrate_collection(
-        "wardrobe", source_db, destination_db, known_emails, report,
-        args.dry_run, upload_images,
-    )
+        def owner_resolver(raw):
+            email = normalize_email(raw)
+            return email if email in known else None
 
-    migrate_collection(
-        "trips", source_db, destination_db, known_emails, report,
-        args.dry_run, False,
-    )
+        source_filter = {}
+
+    migrate_collection("wardrobe", source_db, destination_db, report, args.dry_run,
+                       upload_images, owner_resolver, source_filter)
+    migrate_collection("trips", source_db, destination_db, report, args.dry_run,
+                       False, owner_resolver, source_filter)
 
     print("Summary")
     print("-------")
-    print(f"  Users migrated          : {report['users_migrated']}")
-    print(f"  Users already in Atlas  : {report['users_already_present']}")
-    print(f"  Wardrobe items migrated : {report['wardrobe_migrated']}")
-    print(f"  Wardrobe already there  : {report['wardrobe_already_present']}")
-    print(f"  Trips migrated          : {report['trips_migrated']}")
-    print(f"  Trips already there     : {report['trips_already_present']}")
-
+    if not only_email:
+        print(f"  Users migrated              : {report['users_migrated']}")
+        print(f"  Users already in Atlas      : {report['users_already_present']}")
+    print(f"  Wardrobe items on this PC   : {report['wardrobe_source']}")
+    print(f"  Wardrobe items {'to migrate ' if args.dry_run else 'migrated   '} : {report['wardrobe_migrated']}")
+    print(f"  Wardrobe already in Atlas   : {report['wardrobe_already_present']}")
+    print(f"  Same photo already in cloud : {report['wardrobe_duplicate_photo']}")
+    print(f"  Trips on this PC            : {report['trips_source']}")
+    print(f"  Trips {'to migrate' if args.dry_run else 'migrated  '}            : {report['trips_migrated']}")
+    print(f"  Trips already in Atlas      : {report['trips_already_present']}")
     if args.dry_run:
-        print(f"  Images that would upload: {report['images_to_upload']}")
+        print(f"  Images that would upload    : {report['images_to_upload']}")
     else:
-        print(f"  Images uploaded         : {report['images_uploaded']}")
+        print(f"  Images uploaded             : {report['images_uploaded']}")
 
-    if report["unassigned"]:
-        print()
-        print(
-            f"  {len(report['unassigned'])} record(s) had no matching account "
-            f"and were marked '{LEGACY_UNASSIGNED}' rather than guessed at:"
-        )
-        for line in report["unassigned"][:20]:
-            print(f"    - {line}")
+    for key, title in (
+        ("unassigned", "record(s) had no matching account and were parked"),
+        ("images_missing_on_disk", "item(s) NOT migrated: image file is not on this computer"),
+        ("image_failures", "item(s) NOT migrated: Cloudinary upload failed (re-run to retry)"),
+    ):
+        if report[key]:
+            print(f"\n  {len(report[key])} {title}:")
+            for line in report[key][:20]:
+                print(f"    - {line}")
 
-    if report["images_missing_on_disk"]:
-        print()
-        print(
-            f"  {len(report['images_missing_on_disk'])} item(s) referenced an "
-            "image file that is not on this computer (it may be on the other "
-            "laptop - run this script there too):"
-        )
-        for line in report["images_missing_on_disk"][:20]:
-            print(f"    - {line}")
+    incomplete = bool(report["images_missing_on_disk"] or report["image_failures"])
 
-    if report["image_failures"]:
-        print()
-        print(f"  {len(report['image_failures'])} image upload(s) failed:")
-        for line in report["image_failures"][:20]:
-            print(f"    - {line}")
+    if only_email and not args.dry_run:
+        print("\nVerification (re-read from Atlas)")
+        print("---------------------------------")
+        passed, lines = verify_owner(destination_db, only_email)
+        print("\n".join("  " + line for line in lines))
+        incomplete = incomplete or not passed
 
     print()
-    print(
-        "Done. Your local database and local image files were NOT modified."
-        if not args.dry_run
-        else "Dry run complete - nothing was written or uploaded."
-    )
+    if args.dry_run:
+        print("Dry run complete - nothing was written or uploaded.")
+    else:
+        print("Done. Your local database and local image files were NOT modified.")
+        if incomplete:
+            print("Some items still need attention (listed above). Re-running is safe.")
 
-    return 0
+    return 1 if (incomplete and not args.dry_run) else 0
 
 
 if __name__ == "__main__":

@@ -1,6 +1,8 @@
 import re
 from collections import defaultdict
+from datetime import datetime
 
+from backend import outfit_assignment, outfit_builder
 from backend.category_gender import is_allowed_for_account
 from backend.color_theory import outfit_color_score
 from backend.occasion_model import occasion_fit
@@ -38,12 +40,13 @@ OCCASION_ALIASES = {
     "date": {"date", "date night", "romantic"},
     "party": {"party", "night out", "clubbing", "special occasion", "celebration"},
     "wedding": {"wedding", "shaadi", "marriage", "reception", "engagement"},
-    "traditional": {"traditional", "ethnic", "traditional/ethnic", "festive", "festival", "holiday"}
+    "traditional": {"traditional", "ethnic", "traditional/ethnic", "festive", "festival", "holiday"},
+    "sports": {"sports", "sport", "workout", "gym", "exercise", "running", "yoga"}
 }
 
 CANONICAL_OCCASIONS = [
     "casual", "day_outing", "college", "office", "interview",
-    "date", "party", "wedding", "traditional"
+    "date", "party", "wedding", "traditional", "sports"
 ]
 
 # ------------------------------------------------------------
@@ -83,8 +86,8 @@ CATEGORY_OCCASION_AFFINITY = {
     # carry "party" on their own).
     "shirt": {"casual", "day_outing", "college", "office", "interview", "date"},
     "shirts": {"casual", "day_outing", "college", "office", "interview", "date"},
-    "tshirt": {"casual", "day_outing", "college", "date"},
-    "tshirts": {"casual", "day_outing", "college", "date"},
+    "tshirt": {"casual", "day_outing", "college", "date", "sports"},
+    "tshirts": {"casual", "day_outing", "college", "date", "sports"},
     # NOTE: the stored category string "T-Shirt" normalizes (see
     # _normalize_category) to the tokens {"t", "shirt"} - it shares
     # the "shirt" token with plain "Shirt" and, because
@@ -103,21 +106,27 @@ CATEGORY_OCCASION_AFFINITY = {
     "jeans": {"casual", "day_outing", "college", "date"},
     "denim": {"casual", "day_outing", "college", "date"},
     "denims": {"casual", "day_outing", "college", "date"},
-    "short": {"casual", "day_outing", "college"},
-    "shorts": {"casual", "day_outing", "college"},
+    "short": {"casual", "day_outing", "college", "sports"},
+    "shorts": {"casual", "day_outing", "college", "sports"},
     "skirt": {"casual", "day_outing", "college", "date", "party"},
     "skirts": {"casual", "day_outing", "college", "date", "party"},
-    "jacket": {"office", "interview", "date", "party", "day_outing"},
-    "jackets": {"office", "interview", "date", "party", "day_outing"},
-    "coat": {"office", "interview", "date", "party", "day_outing"},
-    "coats": {"office", "interview", "date", "party", "day_outing"},
+    "jacket": {"casual", "college", "office", "interview", "date", "party", "day_outing"},
+    "jackets": {"casual", "college", "office", "interview", "date", "party", "day_outing"},
+    "coat": {"casual", "college", "office", "interview", "date", "party", "day_outing"},
+    # Garment types that used to be missing here silently counted as
+    # suitable for EVERY occasion (a blazer for a workout).
+    "blazer": {"college", "office", "interview", "date", "party", "wedding"},
+    "blazers": {"college", "office", "interview", "date", "party", "wedding"},
+    "anarkali": {"wedding", "traditional", "party"},
+    "anarkalis": {"wedding", "traditional", "party"},
+    "coats": {"casual", "college", "office", "interview", "date", "party", "day_outing"},
     "dress": {"casual", "day_outing", "college", "date", "party"},
     "dresses": {"casual", "day_outing", "college", "date", "party"},
-    "saree": {"office", "interview", "wedding", "traditional", "party"},
-    "sarees": {"office", "interview", "wedding", "traditional", "party"},
-    "lehenga": {"wedding", "party", "traditional"},
-    "lehengas": {"wedding", "party", "traditional"},
-    "kurta": {"casual", "day_outing", "college", "office", "traditional", "party"},
+    "saree": {"wedding", "traditional"},
+    "sarees": {"wedding", "traditional"},
+    "lehenga": {"wedding", "traditional"},
+    "lehengas": {"wedding", "traditional"},
+    "kurta": {"casual", "day_outing", "college", "office", "traditional", "party", "wedding"},
     "kurtas": {"casual", "day_outing", "college", "office", "traditional", "party"},
     "kurti": {"casual", "day_outing", "college", "office", "traditional", "party"},
     "kurtis": {"casual", "day_outing", "college", "office", "traditional", "party"},
@@ -128,16 +137,27 @@ CATEGORY_OCCASION_AFFINITY = {
     "nehru": {"office", "interview", "wedding", "traditional", "party"},
     "blouse": {"day_outing", "traditional", "wedding", "party"},
     "blouses": {"day_outing", "traditional", "wedding", "party"},
-    "gown": {"date", "party", "wedding", "traditional"},
-    "gowns": {"date", "party", "wedding", "traditional"},
+    "gown": {"date", "party", "wedding"},
+    "gowns": {"date", "party", "wedding"},
     "dupatta": {"wedding", "traditional", "party"},
     "dupattas": {"wedding", "traditional", "party"},
-    "palazzo": {"casual", "day_outing", "college", "traditional", "party"},
-    "palazzos": {"casual", "day_outing", "college", "traditional", "party"},
-    "legging": {"casual", "day_outing", "college", "traditional"},
-    "leggings": {"casual", "day_outing", "college", "traditional"},
-    "salwar": {"casual", "day_outing", "college", "traditional"},
-    "salwars": {"casual", "day_outing", "college", "traditional"},
+    "palazzo": {"casual", "day_outing", "college", "office", "traditional", "party"},
+    "palazzos": {"casual", "day_outing", "college", "office", "traditional", "party"},
+    "legging": {"casual", "day_outing", "college", "office", "traditional"},
+    "leggings": {"casual", "day_outing", "college", "office", "traditional"},
+    "salwar": {"casual", "day_outing", "college", "office", "traditional"},
+    "salwars": {"casual", "day_outing", "college", "office", "traditional"},
+}
+
+
+SPORTSWEAR_WORDS = {"track", "trackpants", "jogger", "joggers", "sweatpants",
+                    "tracksuit", "gym", "activewear", "sportswear", "yoga", "running"}
+
+_KIND_TO_AFFINITY_KEY = {
+    "kurta_men": "kurta",
+    "kurta_women": "kurta",
+    "jeans": "jeans",
+    "boots": None,
 }
 
 
@@ -154,6 +174,25 @@ def infer_occasions_for_category(category):
     of them, so it shouldn't block an otherwise-good outfit from
     being built.
     """
+
+    # Use the ONE most specific garment kind when it is known, so a
+    # multi-word category doesn't inherit a broader word's occasions:
+    # "Dhoti Pants" is a dhoti (not office trousers) and "T-Shirt" is
+    # a t-shirt (not an office shirt). Unrecognised categories fall
+    # back to matching every word, as before.
+    # Sportswear words decide first: track pants are not office
+    # trousers, and leggings (not salwars) are fine for a workout.
+    words = _tokens(category)
+    if words & SPORTSWEAR_WORDS:
+        return {"casual", "day_outing", "sports"}
+
+    kind = outfit_builder.kind_for(category)
+    affinity_key = _KIND_TO_AFFINITY_KEY.get(kind, kind)
+    if affinity_key in CATEGORY_OCCASION_AFFINITY:
+        occasions = set(CATEGORY_OCCASION_AFFINITY[affinity_key])
+        if kind == "salwar" and words & {"legging", "leggings"}:
+            occasions.add("sports")
+        return occasions
 
     tokens = _tokens(category)
     mapped_tokens = tokens & CATEGORY_OCCASION_AFFINITY.keys()
@@ -419,6 +458,14 @@ WARM_MATERIAL_MARKERS = {
 # key is missing.
 HUMID_THRESHOLD_PCT = 70
 
+# Worth mentioning rather than worth panicking about: below this the
+# chance is too low to change what anyone wears.
+RAIN_MENTION_PCT = 40
+
+# How far "feels like" must diverge from the thermometer before it is
+# worth telling the user about.
+FEELS_LIKE_GAP_C = 3
+
 
 def _has_warm_material(item):
     material = (item.get("material") or "").lower()
@@ -503,6 +550,40 @@ def _weather_score(items, weather):
         notes.append(
             "it's a humid day, so lighter fabrics will feel more comfortable"
         )
+
+    # Rain PROBABILITY, separate from "it is raining". A 70% chance is
+    # worth dressing for even though every individual reading may come
+    # back dry, and saying the number is more useful than a flat
+    # "might rain" - the user can decide what to do with 55% vs 90%.
+    rain_chance = weather.get("rain_chance_pct")
+
+    if rain_chance is not None and rain_chance >= RAIN_MENTION_PCT:
+        notes.append(
+            f"there's a {rain_chance}% chance of rain, so something "
+            "water-resistant (or an umbrella) is worth having"
+        )
+
+    # When what it FEELS like differs noticeably from the thermometer,
+    # say so - that gap is usually wind chill or humidity, and it is
+    # the reason a "mild" day can still need a jacket.
+    temperature = weather.get("temp_c")
+    feels_like = weather.get("feels_like_c")
+
+    if (
+        temperature is not None
+        and feels_like is not None
+        and abs(feels_like - temperature) >= FEELS_LIKE_GAP_C
+    ):
+        if feels_like < temperature:
+            notes.append(
+                f"it's {temperature}\u00b0C but feels nearer "
+                f"{feels_like}\u00b0C, so dress for the colder number"
+            )
+        else:
+            notes.append(
+                f"it's {temperature}\u00b0C but feels nearer "
+                f"{feels_like}\u00b0C, so keep it breathable"
+            )
 
     # Several items can trigger the identical note (e.g. two warm
     # layers on a cold day) - de-duplicate while keeping first-seen
@@ -761,12 +842,16 @@ def _filter_by_gender(wardrobe_items, account_gender):
 
 def _outfit_item_ids(outfit):
     """
-    The _id of every wardrobe item in an outfit (top, bottom, dress,
-    accessory - whichever are present). Used only by _diversify()
-    below to track which physical items have already been used.
-    Items with no _id (shouldn't normally happen for real wardrobe
-    data) are simply skipped rather than crashing.
+    The _ids of an outfit's MAIN garments (top/bottom, one-piece,
+    blouse, layer, footwear) - accessories are left out on purpose.
+    Used by _diversify() below and by trip_planner.py to spread which
+    clothes get used; a wardrobe usually has only a couple of watches
+    or bags, and those repeating is expected, not a lack of variety.
+    Falls back to every item for outfits built before core ids existed.
     """
+    if outfit.get("core_item_ids"):
+        return list(outfit["core_item_ids"])
+
     return [
         item.get("_id")
         for item in outfit["items"]
@@ -776,31 +861,11 @@ def _outfit_item_ids(outfit):
 
 def _diversify(candidates, limit):
     """
-    Greedily selects up to `limit` outfits out of `candidates`
-    (already scored by _score_outfit), spreading which actual
-    wardrobe items get used instead of just taking the top N by raw
-    score.
-
-    Without this, a single top that happens to pair well (by color/
-    style) with several different bottoms can dominate the entire
-    top-N list - e.g. the same white shirt showing up in 6 of the 10
-    recommendations, or the trip planner putting a user in the same
-    top three days in a row, even though the wardrobe has other
-    perfectly good tops sitting unused. That's the actual complaint
-    this fixes: recommendations (and, via trip_planner.py asking for
-    a bigger `limit`, a trip's day-by-day plan) shouldn't repeat the
-    same piece over and over while better variety is available.
-
-    How it works: at each step, pick the remaining outfit whose
-    items have been used the LEAST so far (ties broken by score, so
-    quality still decides which outfit wins when variety is equal).
-    Every item starts at zero uses, so the very first picks are
-    still simply the best-scored outfits - this only changes the
-    ORDER once an item would otherwise be reused, never rejects a
-    genuinely good outfit outright, and never fabricates variety a
-    small wardrobe doesn't actually have (a wardrobe with only one
-    top will still recommend that top every time - there's nothing
-    else to rotate in).
+    Greedily picks up to `limit` outfits, spreading which garments get
+    used instead of taking the raw top N by score - otherwise one shirt
+    that pairs well with everything fills every slot. At each step it
+    takes the outfit whose garments have been used least so far, ties
+    broken by score, so the best outfits still come first.
     """
     remaining = list(candidates)
     selected = []
@@ -827,216 +892,389 @@ def _diversify(candidates, limit):
     return selected
 
 
+# ============================================================
+# WEAR HISTORY + LIKE/DISLIKE
+#
+# wear_history: list of {"item_ids": [...], "outfit_key": "...",
+#                        "worn_at": datetime}  (see outfit_feedback.py)
+# feedback:     {outfit_key: "like" | "dislike"}
+#
+# Worn-recently pieces are ranked LOWER (not hidden) so suggestions
+# rotate through the wardrobe; a disliked combination is never shown
+# again; a liked one gets a boost.
+# ============================================================
+
+RECENT_DAYS = 2            # worn in the last 2 days -> big penalty
+WEEK_DAYS = 7              # worn earlier this week  -> smaller penalty
+RECENT_ITEM_PENALTY = 12
+WEEK_ITEM_PENALTY = 6
+SAME_OUTFIT_PENALTY = 10   # this exact combination worn this week
+LIKE_BONUS = 12
+COLD_SHORTS_PENALTY = 15
+
+
+def _days_since(moment, now):
+    if not moment:
+        return None
+    try:
+        return (now - moment).total_seconds() / 86400
+    except TypeError:
+        return None
+
+
+def _history_adjustment(core_items, key, wear_history, now):
+    if not wear_history:
+        return 0, []
+
+    last_item_wear = {}
+    last_outfit_wear = None
+
+    for entry in wear_history:
+        worn_at = entry.get("worn_at")
+        for worn_id in entry.get("item_ids") or []:
+            previous = last_item_wear.get(worn_id)
+            if previous is None or (worn_at and worn_at > previous):
+                last_item_wear[worn_id] = worn_at
+        if key and entry.get("outfit_key") == key:
+            if last_outfit_wear is None or (worn_at and worn_at > last_outfit_wear):
+                last_outfit_wear = worn_at
+
+    points = 0
+    reasons = []
+
+    for item in core_items:
+        days = _days_since(last_item_wear.get(str(item.get("_id"))), now)
+        if days is None:
+            continue
+        name = item.get("category") or "this piece"
+        if days <= RECENT_DAYS:
+            points -= RECENT_ITEM_PENALTY
+            reasons.append(f"you wore this {name} very recently")
+        elif days <= WEEK_DAYS:
+            points -= WEEK_ITEM_PENALTY
+            reasons.append(f"you wore this {name} earlier this week")
+
+    outfit_days = _days_since(last_outfit_wear, now)
+    if outfit_days is not None and outfit_days <= WEEK_DAYS:
+        points -= SAME_OUTFIT_PENALTY
+        reasons.append("you wore this exact combination this week")
+
+    if not reasons:
+        reasons.append("a fresh pick - none of these were worn this week")
+
+    return points, reasons
+
+
+def _cold_weather_penalty(core_kinds, weather):
+    if weather and weather.get("is_cold") and "shorts" in core_kinds:
+        return -COLD_SHORTS_PENALTY, ["shorts are a chilly choice today"]
+    return 0, []
+
+
+ETHNIC_ONLY_OCCASIONS = {"traditional"}
+
+
+def _core_candidates(gender_ok, activity, feedback):
+    """
+    Every wearable main outfit in the wardrobe (before any occasion
+    is chosen), with the occasions and activities it is eligible for
+    and how well it fits each one.
+    """
+    groups = outfit_builder.classify_items(gender_ok)
+    candidates = {}
+
+    for combo in outfit_builder.core_combinations(groups):
+        core = combo["core"]
+        core_kinds = [kind for kind, _ in core]
+        core_items = [item for _, item in core]
+        key = outfit_builder.outfit_key(core_items)
+
+        if not key or key in candidates or feedback.get(key) == "dislike":
+            continue
+
+        # A blouse follows its saree/lehenga, so only the main pieces
+        # decide which occasions the outfit suits.
+        deciding = [
+            item for kind, item in core
+            if outfit_builder.ROLE.get(kind) != outfit_builder.SET_PART
+        ]
+        eligible = set(CANONICAL_OCCASIONS)
+        for item in deciding:
+            eligible &= effective_occasions(item.get("category"), item.get("occasion"))
+
+        # Traditional is ETHNIC-ONLY: no western pieces
+        # and no Indo-western mixes (kurta + jeans) there.
+        if outfit_builder.outfit_style(core_kinds) != "ethnic":
+            eligible -= ETHNIC_ONLY_OCCASIONS
+
+        if not eligible:
+            continue
+
+        fit = {
+            occ: occasion_fit(core_items, occ)[0]
+            + outfit_assignment.kind_weight(
+                outfit_assignment.OCCASION_KIND_WEIGHT.get(occ, {}), core_kinds
+            )
+            + outfit_assignment.colour_weight(occ, deciding)
+            for occ in eligible
+        }
+
+        activities = outfit_assignment.eligible_activities(core_kinds)
+        activity_fit = {
+            name: outfit_assignment.kind_weight(
+                outfit_assignment.ACTIVITY_RULES[name]["weight"], core_kinds
+            )
+            for name in activities
+        }
+
+        candidates[key] = {
+            "combo": combo,
+            "core": core,
+            "core_kinds": core_kinds,
+            "core_items": core_items,
+            "eligible": eligible,
+            "fit": fit,
+            "activities": activities,
+            "activity_fit": activity_fit,
+        }
+
+    return candidates
+
+
+def _complete_and_score(
+    candidate, extras, occasion, weather, activity, wear_history,
+    feedback, now
+):
+    """Adds layer/footwear/accessories, then scores one outfit."""
+    core = candidate["core"]
+    core_kinds = candidate["core_kinds"]
+    core_items = candidate["core_items"]
+    key = outfit_builder.outfit_key(core_items)
+
+    extra_notes = list(candidate["combo"]["notes"])
+
+    garments = list(core_items)
+    garment_kinds = list(core_kinds)
+    roles = {}
+    for kind, item in core:
+        roles[str(item.get("_id"))] = outfit_builder.ROLE.get(kind)
+
+    layer = outfit_builder.choose_layer(core, extras, occasion, weather)
+    if layer and not outfit_builder.too_many_colors(garments + [layer[1]]):
+        layer_kind, layer_item, layer_reason = layer
+        garments.insert(0, layer_item)
+        garment_kinds.append(layer_kind)
+        roles[str(layer_item.get("_id"))] = outfit_builder.LAYER
+        extra_notes.append(f"Layer: {layer_reason}.")
+
+    footwear = outfit_builder.choose_footwear(
+        garment_kinds, garments, extras, weather, occasion
+    )
+    if footwear and not outfit_builder.too_many_colors(garments + [footwear[1]]):
+        garments.append(footwear[1])
+        roles[str(footwear[1].get("_id"))] = outfit_builder.FOOTWEAR
+
+    accessories = outfit_builder.choose_accessories(
+        garment_kinds, garments, extras, occasion
+    )
+    for _, accessory in accessories:
+        roles[str(accessory.get("_id"))] = outfit_builder.ACCESSORY
+
+    outcome = _score_outfit(garments, occasion, weather, activity)
+
+    cold_points, cold_reasons = _cold_weather_penalty(core_kinds, weather)
+    # Only the main garments count for "worn recently" - most people
+    # own a couple of pairs of shoes, and wearing them again is not a
+    # lack of variety.
+    history_points, history_reasons = _history_adjustment(
+        core_items, key, wear_history, now
+    )
+    liked = feedback.get(key) == "like"
+    like_points = LIKE_BONUS if liked else 0
+
+    score = round(outcome["score"] + cold_points + history_points + like_points, 1)
+
+    why = _build_why(
+        occasion, outcome["flagged"],
+        outcome["color_reasons"], outcome["style_reasons"],
+        outcome["weather_reasons"] + cold_reasons,
+        outcome["activity_reasons"], outcome["occasion_reasons"]
+    )
+    why.extend(extra_notes)
+    if liked:
+        why.append("You liked this combination before.")
+    if wear_history:
+        why.extend(f"History: {reason}." for reason in history_reasons)
+
+    return {
+        "occasion": occasion,
+        "activity": activity,
+        "items": garments + [item for _, item in accessories],
+        "type": candidate["combo"]["type"],
+        "style": outfit_builder.outfit_style(garment_kinds),
+        "roles": roles,
+        "outfit_key": key,
+        # What the frontend sends back for "I wore this" / like /
+        # dislike, so the server computes the same outfit_key.
+        "key_item_ids": [
+            str(item.get("_id")) for item in core_items if item.get("_id")
+        ],
+        "core_item_ids": [
+            str(item.get("_id")) for item in garments if item.get("_id")
+        ],
+        "liked": liked,
+        "score": score,
+        "flagged": outcome["flagged"],
+        "color_reasons": outcome["color_reasons"],
+        "style_reasons": outcome["style_reasons"],
+        "weather_reasons": outcome["weather_reasons"] + cold_reasons,
+        "activity_reasons": outcome["activity_reasons"],
+        "occasion_reasons": outcome["occasion_reasons"],
+        "history_reasons": history_reasons if wear_history else [],
+        "why": why,
+    }
+
+
+def _extras_for(gender_ok, occasion, activity):
+    """Layers, footwear and accessories allowed for this occasion/activity."""
+    groups = outfit_builder.classify_items(_filter_by_occasion(gender_ok, occasion))
+    for role in (outfit_builder.LAYER, outfit_builder.FOOTWEAR, outfit_builder.ACCESSORY):
+        groups[role] = [
+            (kind, item) for kind, item in groups[role]
+            if outfit_assignment.activity_allows_extra(role, kind, activity)
+        ]
+    return groups
+
+
 def recommend_outfits(
     wardrobe_items, occasion="casual", weather=None,
-    account_gender=None, limit=10, activity=None
+    account_gender=None, limit=10, activity=None,
+    wear_history=None, feedback=None, now=None,
+    exclusive=False, notes_out=None
 ):
     """
-    Generate ranked complete outfit recommendations
-    from the user's wardrobe.
+    Generate ranked, complete outfits from the user's wardrobe.
 
-    Uses existing wardrobe categories, colors and (automatically
-    inferred) occasions - no manual occasion tagging required.
-    `weather`, when provided, is the dict returned by
-    backend.weather.get_weather() and nudges ranking toward
-    weather-appropriate pieces. `account_gender` ("Male"/"Female"),
-    when provided, is a defense-in-depth filter - see
-    _filter_by_gender() above. `activity` (see CANONICAL_ACTIVITIES),
-    when provided and recognized, is an additional, purely additive
-    ranking nudge - see _activity_bonus() above; it never filters
-    anything out the way `occasion` does.
+      1. HARD FILTERS - gender, occasion, and (if chosen) activity.
+      2. BUILD - backend.outfit_builder decides which garments can be
+         worn together and rejects clashing colours.
+      3. KEEP OCCASIONS DIFFERENT (exclusive=True, used by the app) -
+         backend.outfit_assignment gives every outfit ONE home
+         occasion (and one home activity), so casual, college, day
+         out... don't all show the same outfits.
+      4. COMPLETE - layer only when there's a reason, matching
+         footwear, up to 2 suitable accessories.
+      5. SCORE - colour, style, weather, activity, occasion fit, wear
+         history and likes.
+      6. DIVERSIFY - so one garment doesn't fill every slot.
 
-    Occasion filtering is strict: asking for "party" only builds
-    outfits from items whose CATEGORY is actually a fit for party
-    wear (see infer_occasions_for_category), or that were manually
-    tagged party - a pair of gym shorts never sneaks into a party
-    recommendation just because the wardrobe happens to be short on
-    party wear.
-
-    `limit` caps how many outfits come back, and results are
-    DIVERSIFIED (see _diversify above) rather than just being the
-    raw top-`limit` by score - this is what keeps the same top/
-    bottom from dominating the list when it happens to score well
-    against several different partners. trip_planner.py passes a
-    bigger `limit` than the default 10 for longer trips, so a
-    two-week trip gets more distinct outfits to draw from before it
-    has to repeat any of them.
+    exclusive=False (the default, used by the trip planner and tests)
+    returns every suitable outfit without the one-home-occasion rule.
+    notes_out, if a list is passed, receives plain-English notes
+    about what was done (e.g. outfits kept for other occasions).
     """
-
     if not wardrobe_items:
         return []
 
-    # Resolve once, up front, so filtering, flagging, and the
-    # "occasion" echoed back in each recommendation all agree on
-    # the same canonical value - a request for a recognized synonym
-    # ("formal", "outing", "festive", ...) behaves identically to
-    # requesting the canonical word itself.
+    feedback = feedback or {}
+    now = now or datetime.utcnow()
+    notes = notes_out if notes_out is not None else []
+
     occasion = resolve_occasion_query(occasion)
+    activity_key = outfit_assignment.resolve_activity(activity)
 
-    wardrobe_items = _filter_by_gender(wardrobe_items, account_gender)
-    wardrobe_items = _filter_by_occasion(wardrobe_items, occasion)
+    gender_ok = _filter_by_gender(wardrobe_items, account_gender)
+    candidates = _core_candidates(gender_ok, activity_key, feedback)
 
-    if not wardrobe_items:
+    suitable = {
+        key: c for key, c in candidates.items()
+        if occasion in c["eligible"]
+        and outfit_assignment.activity_allows_core(c["core_kinds"], activity_key)
+    }
+
+    if not suitable:
+        if activity_key and any(occasion in c["eligible"] for c in candidates.values()):
+            notes.append(
+                f"None of your {occasion.replace('_', ' ')} outfits suit "
+                f"{outfit_assignment.ACTIVITY_RULES[activity_key]['label']}. "
+                f"Try another activity, or add pieces meant for it."
+            )
         return []
 
+    chosen = suitable
 
-    # --------------------------------------------------------
-    # Bucket items into tops / bottoms / dresses / accessories
-    # by matching normalized category tokens against keyword
-    # marker sets, instead of relying on exact category strings.
-    # This is what lets items land in the right bucket whether
-    # their category came from the manual dropdown ("Dhoti
-    # Pants") or was overwritten by the IndoFashion classifier
-    # ("dhoti_pants").
-    # --------------------------------------------------------
+    if exclusive:
+        homes = outfit_assignment.draft(
+            {key: {"eligible": c["eligible"], "fit": c["fit"]}
+             for key, c in candidates.items()},
+            CANONICAL_OCCASIONS,
+        )
+        mine = {key: c for key, c in suitable.items() if homes.get(key) == occasion}
 
-    tops = []
-    bottoms = []
-    dresses = []
-    accessories = []
-
-    for item in wardrobe_items:
-
-        category = item.get("category")
-
-        if not category:
-            continue
-
-        tokens = _tokens(category)
-
-        if not tokens:
-            continue
-
-        if tokens & DRESS_MARKERS:
-            dresses.append(item)
-        elif tokens & TOP_MARKERS:
-            tops.append(item)
-        elif tokens & BOTTOM_MARKERS:
-            bottoms.append(item)
-        elif tokens & (ACCESSORY_MARKERS | LAYER_MARKERS):
-            accessories.append(item)
-
-        # Anything that matches none of the marker sets is left
-        # out of outfit generation entirely (rather than crashing
-        # or silently misclassifying it into the wrong bucket).
-
-
-    recommendations = []
-
-
-    # ========================================================
-    # DRESS / ONE-PIECE OUTFITS
-    # ========================================================
-
-    for dress in dresses[:5]:
-
-        items = [dress]
-
-        if accessories:
-
-            items.append(
-                accessories[
-                    len(recommendations)
-                    % len(accessories)
-                ]
+        if activity_key and mine:
+            activity_homes = outfit_assignment.draft(
+                {key: {"eligible": candidates[key]["activities"],
+                       "fit": candidates[key]["activity_fit"]}
+                 for key, c in candidates.items() if homes.get(key) == occasion},
+                list(outfit_assignment.ACTIVITY_RULES),
             )
+            mine = {key: c for key, c in mine.items()
+                    if activity_homes.get(key) == activity_key}
 
-        outcome = _score_outfit(items, occasion, weather, activity)
-
-        recommendations.append({
-            "occasion": occasion,
-            "items": items,
-            "type": "one-piece",
-            "score": outcome["score"],
-            "flagged": outcome["flagged"],
-            "color_reasons": outcome["color_reasons"],
-            "style_reasons": outcome["style_reasons"],
-            "weather_reasons": outcome["weather_reasons"],
-            "activity_reasons": outcome["activity_reasons"],
-            "occasion_reasons": outcome["occasion_reasons"],
-            "why": _build_why(
-                occasion, outcome["flagged"],
-                outcome["color_reasons"], outcome["style_reasons"],
-                outcome["weather_reasons"], outcome["activity_reasons"],
-                outcome["occasion_reasons"]
-            )
+        other_occasions = sorted({
+            homes[key].replace("_", " ")
+            for key in suitable
+            if homes.get(key) and homes[key] != occasion
         })
+        moved_activity = sum(
+            1 for key in suitable
+            if homes.get(key) == occasion and key not in mine
+        )
 
-
-    # ========================================================
-    # TOP + BOTTOM OUTFITS
-    # ========================================================
-
-    for top in tops[:8]:
-
-        for bottom in bottoms[:8]:
-
-            items = [top, bottom]
-
-            if accessories:
-
-                items.append(
-                    accessories[
-                        len(recommendations)
-                        % len(accessories)
-                    ]
+        if mine:
+            chosen = mine
+            if other_occasions:
+                notes.append(
+                    "To keep every occasion different, outfits that suit "
+                    "another occasion better are shown there instead ("
+                    + ", ".join(other_occasions) + ")."
                 )
-
-            outcome = _score_outfit(items, occasion, weather, activity)
-
-            recommendations.append({
-                "occasion": occasion,
-                "items": items,
-                "type": "top-bottom",
-                "score": outcome["score"],
-                "flagged": outcome["flagged"],
-                "color_reasons": outcome["color_reasons"],
-                "style_reasons": outcome["style_reasons"],
-                "weather_reasons": outcome["weather_reasons"],
-                "activity_reasons": outcome["activity_reasons"],
-                "occasion_reasons": outcome["occasion_reasons"],
-                "why": _build_why(
-                    occasion, outcome["flagged"],
-                    outcome["color_reasons"], outcome["style_reasons"],
-                    outcome["weather_reasons"], outcome["activity_reasons"],
-                    outcome["occasion_reasons"]
+            if moved_activity:
+                notes.append(
+                    f"{moved_activity} more outfit(s) for this occasion are "
+                    f"shown under other activities."
                 )
-            })
+        else:
+            notes.append(
+                "Your wardrobe doesn't have pieces specific enough to give "
+                "this choice its own outfits, so these are shared with "
+                "other occasions or activities. Adding a few more items "
+                "will make each one different."
+            )
 
+    extras = _extras_for(gender_ok, occasion, activity_key)
 
-    # ========================================================
-    # DIVERSIFY, THEN LIMIT RESULTS
-    #
-    # Best occasion/color/style matches still surface first (see
-    # _diversify's tie-breaking), but without letting one item
-    # dominate every slot in the list - see _diversify's docstring.
-    # ========================================================
+    recommendations = [
+        _complete_and_score(c, extras, occasion, weather, activity_key,
+                            wear_history, feedback, now)
+        for c in chosen.values()
+    ]
 
     return _diversify(recommendations, limit=limit)
 
 
 def describe_missing_pieces(wardrobe_items, occasion="casual", account_gender=None):
     """
-    Honest "missing item" messaging (spec section 10): when the
-    wardrobe genuinely lacks a piece needed to build a complete
-    outfit for the requested occasion, say so plainly instead of
-    just silently returning fewer (or zero) recommendations - e.g.
-    "Your wardrobe does not contain a suitable bottom to pair with
-    your casual tops." This NEVER fabricates wardrobe contents; it
-    only reports on the same gender/occasion-filtered buckets
-    recommend_outfits() itself builds, using the same marker sets,
-    so its notes always match what recommend_outfits() actually did.
-
-    Returns a list of note strings (possibly empty - an empty list
-    means recommend_outfits() should have everything it needs).
+    Plain-English notes when the wardrobe can't make a complete outfit
+    for this occasion - never invents wardrobe contents. Uses the same
+    filters and the same outfit_builder rules as recommend_outfits(),
+    so the note always matches what actually happened.
     """
-
     occasion = resolve_occasion_query(occasion)
-
-    filtered = _filter_by_gender(wardrobe_items, account_gender)
-    filtered = _filter_by_occasion(filtered, occasion)
-
     label = occasion.replace("_", " ")
+
+    gender_ok = _filter_by_gender(wardrobe_items, account_gender)
+    filtered = _filter_by_occasion(gender_ok, occasion)
 
     if not filtered:
         return [
@@ -1044,44 +1282,58 @@ def describe_missing_pieces(wardrobe_items, occasion="casual", account_gender=No
             f"{label} yet."
         ]
 
-    tops = bottoms = dresses = 0
+    groups = outfit_builder.classify_items(filtered)
+    groups[outfit_builder.SET_PART] = outfit_builder.classify_items(
+        gender_ok
+    )[outfit_builder.SET_PART]
 
-    for item in filtered:
-
-        category = item.get("category")
-
-        if not category:
-            continue
-
-        tokens = _tokens(category)
-
-        if not tokens:
-            continue
-
-        if tokens & DRESS_MARKERS:
-            dresses += 1
-        elif tokens & TOP_MARKERS:
-            tops += 1
-        elif tokens & BOTTOM_MARKERS:
-            bottoms += 1
-
-    if dresses or (tops and bottoms):
+    if any(True for _ in outfit_builder.core_combinations(groups)):
         return []
 
-    if tops and not bottoms:
+    tops = groups[outfit_builder.TOP]
+    bottoms = groups[outfit_builder.BOTTOM]
+
+    if tops and bottoms:
+        compatible = any(
+            bottom_kind in outfit_builder.TOP_BOTTOM_PAIRS.get(top_kind, set())
+            for top_kind, _ in tops
+            for bottom_kind, _ in bottoms
+        )
+        if compatible:
+            return [
+                f"Your {label} tops and bottoms clash in colour, so no "
+                f"outfit was suggested. A neutral piece (black, white, "
+                f"grey, beige, navy or denim) would pair with them."
+            ]
+        needed = sorted({
+            bottom
+            for top_kind, _ in tops
+            for bottom in outfit_builder.TOP_BOTTOM_PAIRS.get(top_kind, set())
+        })
+        return [
+            f"Your {label} tops and bottoms don't go together. Your tops "
+            f"pair with: {', '.join(needed)}."
+        ]
+
+    if tops:
         return [
             f"Your wardrobe does not contain a suitable bottom to "
             f"pair with your {label} tops."
         ]
 
-    if bottoms and not tops:
+    if bottoms:
         return [
             f"Your wardrobe does not contain a suitable top to pair "
             f"with your {label} bottoms."
         ]
 
+    if groups[outfit_builder.SET_PART]:
+        return [
+            f"You have blouses, but no saree or lehenga suitable for "
+            f"{label} to wear them with."
+        ]
+
     return [
-        f"Your wardrobe does not contain a complete top-and-bottom "
-        f"outfit for {label} yet - only accessories or unmatched "
-        f"pieces."
+        f"Your wardrobe does not contain a complete outfit for {label} "
+        f"yet - only accessories, footwear or layers."
     ]

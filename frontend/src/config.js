@@ -46,5 +46,21 @@ export function assetUrl(path) {
     return path;
   }
 
-  return `${API_URL}${path.startsWith("/") ? "" : "/"}${path}`;
+  const url = `${API_URL}${path.startsWith("/") ? "" : "/"}${path}`;
+
+  // Images served from the backend's own disk now require a token,
+  // because the folder name is derived from the email and was
+  // therefore guessable by anyone. An <img> tag cannot send an
+  // Authorization header, so the token goes in the query string -
+  // the backend accepts it there for this route only.
+  //
+  // Cloudinary URLs returned above never reach this line: they are
+  // absolute, and their paths are hashed rather than guessable.
+  const token = localStorage.getItem("token");
+
+  if (token && url.includes("/api/uploads/")) {
+    return `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`;
+  }
+
+  return url;
 }

@@ -5,8 +5,10 @@ import Dashboard from "./pages/Dashboard";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
+import ForgotPassword from "./pages/ForgotPassword";
 import Wardrobe from "./pages/Wardrobe";
 import Profile from "./pages/Profile";
+import TryOn from "./pages/TryOn";
 
 // Gender selection now lives directly on the Login page (see
 // Login.js) instead of a separate screen shown before it - "/" just
@@ -21,6 +23,7 @@ function App() {
         <Route path="/" element={<Navigate to="/login" replace />} />
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/similar" element={<SimilarSearch />} />
         <Route
@@ -30,6 +33,7 @@ function App() {
         <Route path="/wardrobe" element={<Wardrobe />} />
         <Route path="/trip" element={<TripPlanner />} />
         <Route path="/profile" element={<Profile />} />
+        <Route path="/tryon" element={<TryOn />} />
       </Routes>
     </BrowserRouter>
   );

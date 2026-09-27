@@ -1,13 +1,17 @@
 import { useNavigate, useLocation, Link } from "react-router-dom";
-import "../App.css";
+import {
+  HangerIcon, HomeIcon, SparkleIcon, PlaneIcon, TryOnIcon, SearchIcon,
+  GearIcon, LogoutIcon,
+} from "./Icons";
+import { clearProfileCache } from "./PageHeader";
 
 const NAV_ITEMS = [
-  { to: "/dashboard", label: "Home", icon: "🏠" },
-  { to: "/wardrobe", label: "My Wardrobe", icon: "👗" },
-  { to: "/recommend", label: "Recommend Outfit", icon: "✨" },
-  { to: "/trip", label: "Trip Planner", icon: "🧳" },
-  { to: "/similar", label: "Similar Search", icon: "🔍" },
-  { to: "/profile", label: "Profile", icon: "👤" },
+  { to: "/dashboard", label: "Home", Icon: HomeIcon },
+  { to: "/wardrobe", label: "My Wardrobe", Icon: HangerIcon },
+  { to: "/recommend", label: "Outfit Recommendations", Icon: SparkleIcon },
+  { to: "/trip", label: "Trip Planner", Icon: PlaneIcon },
+  { to: "/tryon", label: "Virtual Try-On", Icon: TryOnIcon },
+  { to: "/similar", label: "Find Similar Clothes", Icon: SearchIcon },
 ];
 
 function Sidebar() {
@@ -15,51 +19,58 @@ function Sidebar() {
   const location = useLocation();
 
   const handleLogout = () => {
-    // Also clears "gender" - previously only "token" was cleared
-    // here, unlike every other logout/session-expiry path in this
-    // app (Dashboard.js, Wardrobe.js, Profile.js), which left a
-    // stale gender value sitting in localStorage after a normal
-    // logout from the sidebar.
     localStorage.removeItem("token");
     localStorage.removeItem("gender");
+    clearProfileCache();
     navigate("/login");
   };
 
   return (
-    <div className="sidebar">
-      <div className="sidebar-brand">
-        <span role="img" aria-label="hanger">
-          👚
-        </span>
-        WardrobeAI
-      </div>
+    <aside className="aw-sidebar">
+      <Link to="/dashboard" className="aw-brand">
+        <HangerIcon width={34} height={34} />
+        <div>
+          <div className="aw-brand-name">AI Wardrobe</div>
+          <div className="aw-brand-tag">Dress Smarter. Live Better.</div>
+        </div>
+      </Link>
 
-      <nav className="sidebar-nav">
-        {NAV_ITEMS.map((item) => (
+      <nav className="aw-nav">
+        {NAV_ITEMS.map(({ to, label, Icon }) => (
           <Link
-            key={item.to}
-            to={item.to}
-            className={
-              location.pathname === item.to ? "active" : ""
-            }
+            key={to}
+            to={to}
+            className={location.pathname === to ? "active" : ""}
           >
-            <span className="icon">{item.icon}</span>
-            {item.label}
+            <Icon />
+            {label}
           </Link>
         ))}
       </nav>
 
-      <div className="sidebar-footer-card">
-        "Good outfits build good days."
+      <div className="aw-quote">
+        <span className="leaf">❦</span>
+        Good style
+        <br />
+        is a form of
+        <br />
+        self care ♡
       </div>
 
-      <button
-        className="sidebar-logout"
-        onClick={handleLogout}
-      >
-        ⎋ Logout
-      </button>
-    </div>
+      <div className="aw-nav aw-nav-bottom">
+        <Link
+          to="/profile"
+          className={location.pathname === "/profile" ? "active" : ""}
+        >
+          <GearIcon />
+          Settings
+        </Link>
+        <button type="button" onClick={handleLogout}>
+          <LogoutIcon width={19} height={19} />
+          Log Out
+        </button>
+      </div>
+    </aside>
   );
 }
 

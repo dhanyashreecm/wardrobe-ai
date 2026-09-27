@@ -102,6 +102,8 @@ CATEGORY_GENDER_TOKENS = {
     "kurta": None,  # ambiguous alone - see _gender_from_tokens below
     "kurtas": None,
     "kurti": FEMALE, "kurtis": FEMALE,
+    "crop": FEMALE,
+    "heel": FEMALE, "heels": FEMALE, "stiletto": FEMALE, "stilettos": FEMALE,
     "men": MALE,
     "women": FEMALE,
 }
