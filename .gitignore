@@ -63,3 +63,4 @@ venv/
 # Output of scripts/finish_cloud_setup.sh (no secrets, local only)
 cloud_setup_report.txt
 backend_e2e.log
+check_setup.log

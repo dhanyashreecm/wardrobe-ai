@@ -45,10 +45,17 @@ step() { echo; echo "=================================================="; echo "
 FAILED=0
 
 step "1. Unit tests"
-python -m unittest discover -s backend/tests -t . 2>&1 | tail -25
+python -m unittest discover -b -s backend/tests -t . 2>&1 | tail -25
 [ "${PIPESTATUS[0]}" -eq 0 ] || FAILED=1
 
 step "2. Account check + safe repair (Atlas)"
+if ! python -m backend.check_setup --skip-upload > check_setup.log 2>&1; then
+  sed -n '/2. MONGODB ATLAS/,/Stopping here/p' check_setup.log | grep -v "SSL handshake failed: ac-" | cut -c1-160
+  echo
+  echo "RESULT: STOPPED - this computer cannot reach Atlas (see DIAGNOSIS above)."
+  echo "Nothing was changed. Fix that, then run this script again."
+  exit 1
+fi
 python -m backend.account_doctor --all --fix || FAILED=1
 
 step "3. End-to-end cloud check (temporary backend on port $PORT)"

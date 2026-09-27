@@ -383,6 +383,18 @@ def main(argv=None):
         print("Source and destination are the same database - point MONGODB_URI in .env at Atlas first.")
         return 1
 
+    # A computer whose local data must NEVER be migrated (e.g. one that
+    # holds only an older, partial copy of someone's wardrobe) carries
+    # this marker file. It lives in backend/uploads/, which git ignores,
+    # so it stays on that one computer.
+    blocker = os.path.join(storage.BASE_UPLOAD_FOLDER, ".not_a_migration_source")
+    if os.path.isfile(blocker):
+        print("This computer is marked as NOT a migration source")
+        print(f"({blocker} exists): its local data is an old/partial copy")
+        print("and must not be copied to Atlas. Run the migration on the")
+        print("computer that holds the original data instead. Nothing was changed.")
+        return 1
+
     if only_email and args.skip_images:
         print("--skip-images is not allowed with --only-email: it would leave local paths in Atlas.")
         return 1

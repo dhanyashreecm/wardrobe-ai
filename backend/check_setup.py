@@ -164,7 +164,29 @@ def check_database():
         print("   3. dnspython is missing (needed for mongodb+srv://):")
         print("      pip install dnspython")
 
-        if "SSL" in detail or "TLS" in detail or "handshake" in detail.lower():
+        if "TLSV1_ALERT_INTERNAL_ERROR" in detail:
+            # This alert is SENT BY ATLAS: it is how Atlas turns away a
+            # connection from an IP address that is not on the
+            # project's Network Access list. It is not a certificate
+            # problem on this computer (that shows up as
+            # CERTIFICATE_VERIFY_FAILED instead). The usual trigger is
+            # the laptop joining a different Wi-Fi, which changes its
+            # public IP.
+            print()
+            print("  DIAGNOSIS: Atlas refused this computer's IP address.")
+            print("  ('tlsv1 alert internal error' is Atlas rejecting an IP that")
+            print("   is not on its Network Access list - usually because this")
+            print("   laptop is on a different Wi-Fi than when it was added.)")
+            try:
+                import urllib.request
+                with urllib.request.urlopen("https://api.ipify.org", timeout=8) as response:
+                    print(f"  This computer's public IP right now: {response.read().decode().strip()}")
+            except Exception:
+                pass
+            print("  Fix: cloud.mongodb.com -> your project -> Network Access ->")
+            print("       Add IP Address -> Add Current IP Address -> Confirm,")
+            print("       wait ~1 minute, then run this again.")
+        elif "SSL" in detail or "TLS" in detail or "handshake" in detail.lower():
             print()
             print("  This one is an SSL HANDSHAKE failure, which is a")
             print("  certificate problem on THIS computer, not a problem with")
