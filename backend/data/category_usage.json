@@ -1,0 +1,143 @@
+{
+ "Tshirts": {
+  "Casual": 0.865,
+  "Sports": 0.135,
+  "Formal": 0.0
+ },
+ "Shirts": {
+  "Casual": 0.72,
+  "Formal": 0.269,
+  "Smart Casual": 0.006,
+  "Ethnic": 0.004,
+  "Party": 0.001
+ },
+ "Tops": {
+  "Casual": 0.965,
+  "Ethnic": 0.026,
+  "Sports": 0.007,
+  "Formal": 0.002,
+  "Party": 0.001
+ },
+ "Jeans": {
+  "Casual": 1.0
+ },
+ "Trousers": {
+  "Casual": 0.542,
+  "Formal": 0.445,
+  "Ethnic": 0.009,
+  "Smart Casual": 0.004
+ },
+ "Leggings": {
+  "Casual": 0.825,
+  "Ethnic": 0.169,
+  "Sports": 0.006
+ },
+ "Track Pants": {
+  "Sports": 0.622,
+  "Casual": 0.378
+ },
+ "Shorts": {
+  "Casual": 0.651,
+  "Sports": 0.349
+ },
+ "Skirts": {
+  "Casual": 0.773,
+  "Formal": 0.102,
+  "Ethnic": 0.086,
+  "Sports": 0.039
+ },
+ "Kurtas": {
+  "Ethnic": 0.996,
+  "Casual": 0.004
+ },
+ "Kurtis": {
+  "Ethnic": 0.991,
+  "Casual": 0.009
+ },
+ "Sarees": {
+  "Ethnic": 1.0
+ },
+ "Dresses": {
+  "Casual": 0.953,
+  "Party": 0.041,
+  "Formal": 0.004,
+  "Smart Casual": 0.002
+ },
+ "Jackets": {
+  "Casual": 0.698,
+  "Sports": 0.295,
+  "Ethnic": 0.004,
+  "Travel": 0.004
+ },
+ "Blazers": {
+  "Formal": 0.875,
+  "Casual": 0.125
+ },
+ "Sweaters": {
+  "Casual": 0.971,
+  "Sports": 0.029
+ },
+ "Sweatshirts": {
+  "Casual": 0.881,
+  "Sports": 0.119
+ },
+ "Churidar": {
+  "Ethnic": 1.0
+ },
+ "Salwar": {
+  "Ethnic": 1.0
+ },
+ "Patiala": {
+  "Ethnic": 1.0
+ },
+ "Tunics": {
+  "Casual": 0.882,
+  "Ethnic": 0.118
+ },
+ "Capris": {
+  "Casual": 0.714,
+  "Sports": 0.274,
+  "Ethnic": 0.011
+ },
+ "Waistcoat": {
+  "Casual": 0.933,
+  "Ethnic": 0.067
+ },
+ "Dupatta": {
+  "Ethnic": 1.0
+ },
+ "Formal Shoes": {
+  "Formal": 0.953,
+  "Casual": 0.033,
+  "Smart Casual": 0.014
+ },
+ "Casual Shoes": {
+  "Casual": 0.988,
+  "Formal": 0.005,
+  "Sports": 0.004,
+  "Smart Casual": 0.002
+ },
+ "Heels": {
+  "Casual": 0.973,
+  "Formal": 0.017,
+  "Ethnic": 0.008,
+  "Party": 0.002,
+  "Smart Casual": 0.001
+ },
+ "Sports Shoes": {
+  "Sports": 0.98,
+  "Casual": 0.02
+ },
+ "Flats": {
+  "Casual": 0.968,
+  "Ethnic": 0.026,
+  "Sports": 0.004,
+  "Formal": 0.002
+ },
+ "Sandals": {
+  "Casual": 0.977,
+  "Sports": 0.012,
+  "Formal": 0.01,
+  "Smart Casual": 0.001
+ }
+}

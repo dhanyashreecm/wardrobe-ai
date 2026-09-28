@@ -93,12 +93,17 @@ def get_user_profile(email):
         # every other optional field (color, material, styling) as.
         "phone": user.get("phone", ""),
         "profile_picture": user.get("profile_picture", ""),
+        # Default city/location for weather-aware recommendations
+        # (see backend.app's /api/ai/recommend, which falls back to
+        # this when the request doesn't pass an explicit ?city=) -
+        # same "" not-set-yet convention as phone above.
+        "city": user.get("city", ""),
     }
 
 
-def update_user_profile(email, name=None, phone=None):
+def update_user_profile(email, name=None, phone=None, city=None):
     """
-    Updates ONLY "name" and "phone" - the two fields that are
+    Updates ONLY "name", "phone" and "city" - fields that are
     genuinely safe to let a user change themselves.
 
     Email is deliberately NOT editable here: it's the account's
@@ -120,6 +125,12 @@ def update_user_profile(email, name=None, phone=None):
         # phone number) - unlike name, which should never be blanked
         # out to empty since every account must have SOME name.
         set_fields["phone"] = phone.strip()
+
+    if city is not None:
+        # Same "clearing is meaningful" reasoning as phone - a user
+        # who travels a lot may deliberately want to go back to
+        # entering a city by hand each time instead of a stale default.
+        set_fields["city"] = city.strip()
 
     if not set_fields:
         return {"success": False, "message": "Nothing to update"}

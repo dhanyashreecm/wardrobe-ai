@@ -3,6 +3,7 @@ import axios from "axios";
 import { useNavigate } from "react-router-dom";
 import Layout from "../components/Layout";
 import "../App.css";
+import { API_URL, assetUrl } from "../config";
 
 // Matches backend.auth.get_user_profile()'s "gender" values - shown
 // read-only here since gender is permanently locked at registration
@@ -29,6 +30,10 @@ function Profile() {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  // Default city, used to auto-apply weather-aware recommendations
+  // (see OutfitRecommendation.js) without retyping a city every
+  // visit - saving here is optional, exactly like phone.
+  const [city, setCity] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
 
@@ -53,7 +58,7 @@ function Profile() {
   const fetchProfile = async () => {
     try {
       const res = await axios.get(
-        "http://localhost:5001/api/user/profile",
+        `${API_URL}/api/user/profile`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
@@ -61,6 +66,7 @@ function Profile() {
         setProfile(res.data.profile);
         setName(res.data.profile.name || "");
         setPhone(res.data.profile.phone || "");
+        setCity(res.data.profile.city || "");
       } else {
         setError(res.data.message || "Could not load profile.");
       }
@@ -99,6 +105,7 @@ function Profile() {
   const handleEditCancel = () => {
     setName(profile.name || "");
     setPhone(profile.phone || "");
+    setCity(profile.city || "");
     setEditing(false);
   };
 
@@ -113,8 +120,8 @@ function Profile() {
 
     try {
       const res = await axios.put(
-        "http://localhost:5001/api/user/profile",
-        { name, phone },
+        `${API_URL}/api/user/profile`,
+        { name, phone, city },
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
@@ -167,7 +174,7 @@ function Profile() {
 
     try {
       const res = await axios.post(
-        "http://localhost:5001/api/user/profile/picture",
+        `${API_URL}/api/user/profile/picture`,
         formData,
         {
           headers: {
@@ -240,7 +247,7 @@ function Profile() {
 
     try {
       const res = await axios.delete(
-        "http://localhost:5001/api/user/account",
+        `${API_URL}/api/user/account`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
@@ -324,7 +331,7 @@ function Profile() {
               <img
                 src={
                   picturePreview ||
-                  `http://localhost:5001${profile.profile_picture}`
+                  assetUrl(profile.profile_picture)
                 }
                 alt="Profile"
                 style={{
@@ -381,6 +388,22 @@ function Profile() {
               </p>
 
               <p className="item-meta">
+                <strong>Default city:</strong>{" "}
+                {profile.city || "Not set"}
+              </p>
+
+              <p
+                style={{
+                  fontSize: "12px",
+                  color: "#8a7a6d",
+                  marginTop: "-4px",
+                }}
+              >
+                Used to apply today's weather to your outfit
+                recommendations automatically.
+              </p>
+
+              <p className="item-meta">
                 <strong>Wardrobe:</strong>{" "}
                 {GENDER_LABELS[profile.gender] ||
                   "Not set"}
@@ -397,7 +420,7 @@ function Profile() {
                 onClick={handleEditStart}
                 style={{ marginTop: "10px" }}
               >
-                Edit Name / Phone
+                Edit Name / Phone / City
               </button>
             </>
           ) : (
@@ -415,6 +438,25 @@ function Profile() {
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
               />
+
+              <label className="field-label">Default city</label>
+              <input
+                placeholder="e.g. Bengaluru (optional)"
+                value={city}
+                onChange={(e) => setCity(e.target.value)}
+              />
+              <p
+                style={{
+                  fontSize: "12px",
+                  color: "#8a7a6d",
+                  marginTop: "2px",
+                  marginBottom: "12px",
+                }}
+              >
+                Recommendations will use this city's weather
+                automatically. You can still type a different city
+                for one-off checks.
+              </p>
 
               <p
                 style={{

@@ -4,7 +4,7 @@ from bson.objectid import ObjectId
 
 wardrobe_collection = db["wardrobe"]
 
-def add_item(user_email, category, color, image_path, occasion="", material=None, styling=None):
+def add_item(user_email, category, color, image_path, occasion="", material=None, styling=None, attributes=None):
     # occasion is now an OPTIONAL manual override, not a required
     # field - "" (the default) means "fully automatic": which
     # occasions this item is eligible for gets worked out from its
@@ -35,6 +35,16 @@ def add_item(user_email, category, color, image_path, occasion="", material=None
     # resolve_style() when scoring outfits.
     if styling:
         item["styling"] = styling
+
+    # Structured description built at upload time (role, style,
+    # season/weather suitability, colours, pattern - see
+    # backend.item_attributes). Stored so later recommendations can
+    # read it without re-analysing the photo, and so the UI can show
+    # what was detected. Optional: an item saved by older code, or by
+    # the migration, simply has no "attributes" key and everything
+    # still works from its category and colour as before.
+    if attributes:
+        item["attributes"] = attributes
 
     result = wardrobe_collection.insert_one(item)
     return str(result.inserted_id)
