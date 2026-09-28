@@ -284,6 +284,122 @@ def email_configured():
 
 
 # ============================================================
+# VIRTUAL TRY-ON (optional - see virtual_tryon.py)
+#
+# WHY IT IS CONFIGURED THIS WAY
+#
+# Realistic try-on means running a diffusion model, which needs a
+# CUDA GPU. Neither machine in this project has one, so the model runs
+# elsewhere and this application calls it. Two constraints drove the
+# choice:
+#
+#   COMMERCIALLY SAFE LICENCE. Almost every well-known open try-on
+#   model - IDM-VTON, CatVTON, OOTDiffusion, StableVITON, VITON-HD -
+#   is CC BY-NC-SA 4.0, which forbids commercial use. FASHN VTON v1.5
+#   is Apache-2.0, so it carries no such restriction.
+#
+#   NO COST. A Hugging Face ZeroGPU Space runs on a real GPU and is
+#   free to host, with a daily GPU-minutes allowance rather than a
+#   bill. Enough for development and a demo; not enough for many
+#   simultaneous users. TRYON_DAILY_BUDGET_NOTE below is what the UI
+#   tells people when the allowance runs out.
+#
+# The provider is deliberately swappable (TRYON_PROVIDER): the same
+# code can call a paid API later without the rest of the application
+# changing.
+# ============================================================
+
+# Providers, in the order they are tried (see tryon_orchestrator.py):
+#   fashn_space  - the public FASHN VTON v1.5 Space (TRYON_SPACE_ID)
+#   self_hosted  - the same model on your own free Colab/Kaggle notebook
+#                  (TRYON_FALLBACK_URL, the https link it prints)
+# e.g. TRYON_PROVIDERS=fashn_space,self_hosted
+# Left empty, the older single TRYON_PROVIDER is used, followed by
+# self_hosted whenever TRYON_FALLBACK_URL is set.
+TRYON_PROVIDERS = _get("TRYON_PROVIDERS")
+
+# Older single-provider setting, still honoured:
+# "huggingface_space" / "fashn_space" (same thing) or "none".
+TRYON_PROVIDER = _get("TRYON_PROVIDER", "huggingface_space")
+
+# The https share link printed by spaces/tryon/colab_tryon.ipynb (Google
+# Colab free GPU - no payment, no token). Changes every time the
+# notebook is started; blank = no self-hosted fallback.
+TRYON_FALLBACK_URL = _get("TRYON_FALLBACK_URL")
+
+# The Space that hosts the model, as "owner/space-name" - normally the
+# official public one, "fashn-ai/fashn-vton-1.5" (free, ZeroGPU). Your
+# own copy (spaces/tryon/) or a Colab share link also work.
+TRYON_SPACE_ID = _get("TRYON_SPACE_ID")
+
+# OPTIONAL Hugging Face access token, READ permission only. Without it
+# the backend calls the public Space anonymously (smallest free ZeroGPU
+# allowance, lowest queue priority). With a free account's token the
+# allowance is that account's. Server-side only - never sent to the
+# browser, never logged.
+HUGGINGFACE_API_TOKEN = _get("HUGGINGFACE_API_TOKEN")
+
+# How long to wait for one generation before giving up. Generous
+# because a sleeping Space has to wake up first, and a cold start can
+# take a while.
+try:
+    TRYON_TIMEOUT_SECONDS = int(_get("TRYON_TIMEOUT_SECONDS", "300") or "300")
+except ValueError:
+    TRYON_TIMEOUT_SECONDS = 300
+
+# Largest photo a user may upload, in megabytes. Bigger images cost
+# more GPU time for no visible benefit - the model works at a fixed
+# resolution anyway.
+# How the garment photo is shot, for hosts that ask (the official FASHN
+# Space does): "flat-lay" for a garment photographed on its own - which
+# is what the wardrobe stores after background removal - or "model"
+# for a garment photographed being worn.
+TRYON_GARMENT_PHOTO_TYPE = _get("TRYON_GARMENT_PHOTO_TYPE", "flat-lay") or "flat-lay"
+if TRYON_GARMENT_PHOTO_TYPE not in ("flat-lay", "model"):
+    TRYON_GARMENT_PHOTO_TYPE = "flat-lay"
+
+try:
+    TRYON_MAX_UPLOAD_MB = int(_get("TRYON_MAX_UPLOAD_MB", "8") or "8")
+except ValueError:
+    TRYON_MAX_UPLOAD_MB = 8
+
+
+def tryon_host_is_url():
+    """
+    Whether the model is hosted at a plain https address rather than as
+    a Hugging Face Space.
+
+    This is the escape hatch for a real constraint: ZeroGPU requires a
+    Hugging Face account more than 30 days old, so a project on a
+    two-week deadline cannot use it. A Gradio app on a free Colab GPU
+    prints an https share link instead, and gradio_client calls either
+    kind identically.
+    """
+    return TRYON_SPACE_ID.startswith("https://")
+
+
+def tryon_configured():
+    """
+    True when this machine can actually generate a try-on.
+
+    Only the host is required. A Hugging Face token is optional: without
+    one, a public ZeroGPU Space still answers, from the smaller anonymous
+    GPU allowance; with one, from that account's free allowance. A
+    share-link host never needs a token.
+    """
+    names = [n.strip() for n in TRYON_PROVIDERS.split(",") if n.strip()] or [TRYON_PROVIDER]
+    if TRYON_FALLBACK_URL and "self_hosted" not in names:
+        names.append("self_hosted")
+    if any(n in ("huggingface_space", "fashn_space") for n in names) and TRYON_SPACE_ID:
+        return True
+    if "self_hosted" in names and TRYON_FALLBACK_URL.startswith("https://"):
+        return True
+    # A token is optional: a public Space answers anonymous callers
+    # too, just from a smaller GPU allowance.
+    return False
+
+
+# ============================================================
 # VALIDATION
 # ============================================================
 
@@ -342,6 +458,14 @@ def warnings():
             "Set SMTP_USERNAME and SMTP_PASSWORD in .env to enable it."
         )
 
+    if not tryon_configured():
+        found.append(
+            "Virtual try-on is not configured - every other feature works "
+            "normally, but the Try-On page will say the feature is "
+            "unavailable. Set TRYON_SPACE_ID (e.g. fashn-ai/fashn-vton-1.5) "
+            "and/or TRYON_FALLBACK_URL (your Colab notebook's link) in .env."
+        )
+
     if not OPENWEATHER_API_KEY:
         found.append(
             "OPENWEATHER_API_KEY is not set - outfit recommendations and "
@@ -378,6 +502,9 @@ def describe_startup():
     )
     lines.append(
         f"  Email         : {'configured' if email_configured() else 'not configured'}"
+    )
+    lines.append(
+        f"  Virtual try-on: {'configured' if tryon_configured() else 'not configured'}"
     )
 
     return "\n".join(lines)

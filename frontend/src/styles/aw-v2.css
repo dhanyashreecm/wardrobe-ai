@@ -135,3 +135,17 @@
   .aw-look-piece img { height: 100px; }
   .aw-wcard-actions .aw-icon-btn { padding: 4px 8px; font-size: 11px; }
 }
+
+/* ---- Style inspiration (reference pictures, no links) ---- */
+.aw-inspiration { margin-top: 34px; }
+.aw-inspiration-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 124px)); gap: 14px;
+}
+.aw-inspiration-grid figure { margin: 0; }
+.aw-inspiration-grid img {
+  width: 100%; aspect-ratio: 3 / 4; object-fit: cover; border-radius: 14px;
+  background: #fff; border: 1px solid var(--aw-border); display: block;
+}
+.aw-inspiration-grid figcaption { font-size: 12.5px; color: var(--aw-muted); margin-top: 6px; }
+.aw-details-fields .aw-chips { margin: 8px 0 4px; gap: 8px; }
+.aw-chip.on { background: var(--aw-rose-light) !important; border-color: var(--aw-rose) !important; color: var(--aw-rose-dark); }

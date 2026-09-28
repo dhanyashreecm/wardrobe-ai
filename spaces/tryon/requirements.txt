@@ -1,0 +1,8 @@
+# Wardrobe-AI try-on Space.
+#
+# torch is provided by the ZeroGPU image, so it is deliberately NOT
+# pinned here - installing a second copy is a slow way to break the
+# build.
+git+https://github.com/fashn-AI/fashn-vton-1.5.git
+huggingface_hub>=0.25
+Pillow>=10.0

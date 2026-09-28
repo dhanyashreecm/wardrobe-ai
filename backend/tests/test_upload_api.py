@@ -20,8 +20,11 @@ from unittest import mock
 
 def _png_bytes():
     from PIL import Image
+    from PIL import ImageDraw
     buf = io.BytesIO()
-    Image.new("RGB", (40, 60), (20, 20, 20)).save(buf, format="PNG")
+    img = Image.new("RGB", (300, 400), (225, 220, 210))      # floor/wall
+    ImageDraw.Draw(img).rectangle((90, 90, 210, 320), fill=(20, 20, 20))  # garment
+    img.save(buf, format="PNG")
     return buf.getvalue()
 
 
@@ -66,12 +69,14 @@ class UploadApiTests(unittest.TestCase):
             mock.patch.object(m.storage, "upload_local_file",
                               return_value="https://res.cloudinary.com/demo/image/upload/x.jpg"),
             mock.patch.object(m, "detect_colors", return_value={"primary": "black", "secondary": []}),
+            mock.patch.object(m, "detect_colors_from_pixels", return_value={"primary": "black", "secondary": []}),
             mock.patch.object(m.garment_classifier, "is_available", return_value=False),
         ]
         self.mocks = [p.start() for p in self.patches]
         self.add_item = self.mocks[2]
         self.cloud = self.mocks[4]
         self.detect = self.mocks[5]
+        self.detect_px = self.mocks[6]
 
     def tearDown(self):
         for p in self.patches:
@@ -148,6 +153,7 @@ class UploadApiTests(unittest.TestCase):
 
     def test_colour_failure_uses_message_key(self):
         self.detect.return_value = {}
+        self.detect_px.return_value = {}
         res = self._post(data={"color": ""})
         self.assertEqual(res.status_code, 400)
         self.assertIn("colour", res.get_json()["message"].lower())
@@ -165,6 +171,121 @@ class UploadApiTests(unittest.TestCase):
         res = self._post()
         self.assertEqual(res.status_code, 500)
         self.assertIn("Upload failed", res.get_json()["message"])
+
+    def test_background_removed_before_storage_and_original_kept(self):
+        res = self._post()
+        body = res.get_json()
+        self.assertEqual(res.status_code, 200, body)
+        self.assertTrue(body["background_removed"])
+        uploaded = [c.args[0] for c in self.cloud.call_args_list]
+        kinds = [c.kwargs.get("kind") for c in self.cloud.call_args_list]
+        self.assertTrue(uploaded[0].endswith("_clean.jpg"))       # processed = primary image
+        self.assertIn("originals", kinds)                          # original retained
+        attributes = self.add_item.call_args[0][7]
+        self.assertTrue(attributes["image_processing"]["background_removed"])
+        # colour read from the garment's own pixels, not the photo
+        self.detect_px.assert_called_once()
+        self.detect.assert_not_called()
+
+    def test_tiny_image_rejected_with_message(self):
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.new("RGB", (40, 40), "red").save(buf, format="PNG")
+        res = self._post(image=buf.getvalue())
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("too small", res.get_json()["message"])
+        self.add_item.assert_not_called()
+
+    def test_male_account_cannot_save_a_saree(self):
+        with mock.patch.object(self.m, "get_user_gender", return_value="Male"):
+            res = self._post(data={"category": "Saree"})
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("men's", res.get_json()["message"])
+        self.add_item.assert_not_called()
+        self.cloud.assert_not_called()
+
+    def test_female_account_cannot_save_a_sherwani(self):
+        res = self._post(data={"category": "Sherwani"})
+        self.assertEqual(res.status_code, 400)
+        self.add_item.assert_not_called()
+
+    def test_item_saved_with_account_gender_and_canonical_name(self):
+        res = self._post(data={"category": "Denims"})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(self.add_item.call_args[0][1], "Jeans")
+        self.assertEqual(self.add_item.call_args.kwargs.get("gender"), "female")
+
+    def test_account_without_gender_is_asked_to_set_it(self):
+        with mock.patch.object(self.m, "get_user_gender", return_value=None):
+            res = self._post()
+        self.assertEqual(res.status_code, 409)
+
+    def test_categories_endpoint_is_gender_specific(self):
+        with mock.patch.object(self.m, "get_user_gender", return_value="Male"):
+            res = self.client.get("/api/wardrobe/categories",
+                                  headers={"Authorization": f"Bearer {self._token()}"})
+        values = [c["value"] for s in res.get_json()["sections"] for c in s["categories"]]
+        self.assertIn("Sherwani", values)
+        self.assertNotIn("Saree", values)
+        self.assertNotIn("Lehenga", values)
+
+    def _auto(self, prediction):
+        with mock.patch.object(self.m.garment_classifier, "is_available", return_value=True), \
+             mock.patch.object(self.m.garment_classifier, "predict", return_value=prediction):
+            return self._post(data={"category": "", "category_explicit": "false"})
+
+    def test_broad_classifier_class_asks_the_user_and_saves_nothing(self):
+        res = self._auto({"category": "Pant", "confidence": 0.93, "top": [("Pant", 0.93)]})
+        self.assertEqual(res.status_code, 422)
+        body = res.get_json()
+        values = [o["value"] for o in body["options"]]
+        self.assertIn("Track Pants", values)
+        self.assertNotIn("Leggings", values)
+        self.add_item.assert_not_called()
+        self.cloud.assert_not_called()
+
+    def test_reliable_confident_class_is_applied(self):
+        res = self._auto({"category": "Saree", "confidence": 0.9, "top": [("Saree", 0.9)]})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(self.add_item.call_args[0][1], "Saree")
+
+    def test_unsure_classifier_asks_the_user(self):
+        res = self._auto({"category": "Saree", "confidence": 0.3,
+                          "top": [("Saree", 0.3), ("Lehenga", 0.25)]})
+        self.assertEqual(res.status_code, 422)
+        values = [o["value"] for o in res.get_json()["options"]]
+        self.assertEqual(values[:2], ["Saree", "Lehenga"])
+        self.add_item.assert_not_called()
+
+    def _categories(self, gender):
+        with mock.patch.object(self.m, "get_user_gender", return_value=gender):
+            return self.client.get("/api/wardrobe/categories",
+                                   headers={"Authorization": f"Bearer {self._token()}"})
+
+    def test_categories_female_only_womens(self):
+        res = self._categories("Female")
+        values = [c["value"] for s in res.get_json()["sections"] for c in s["categories"]]
+        for cat in ("Saree", "Casual Saree", "Wedding Saree", "Lehenga", "Salwar Suit", "Crop Top", "Skirt", "Dress"):
+            self.assertIn(cat, values)
+        for cat in ("Sherwani", "Kurta (Men)", "Nehru Jacket", "Dhoti Pants", "Tie", "Bow Tie"):
+            self.assertNotIn(cat, values)
+
+    def test_categories_male_exact_bug_report(self):
+        res = self._categories("Male")
+        values = [c["value"] for s in res.get_json()["sections"] for c in s["categories"]]
+        for cat in ("Saree", "Casual Saree", "Wedding Saree", "Lehenga", "Salwar Suit", "Kurta (Women)",
+                    "Anarkali", "Dupatta", "Skirt", "Dress", "Gown", "Jumpsuit", "Romper", "Crop Top",
+                    "Leggings", "Blouse"):
+            self.assertNotIn(cat, values)
+        for cat in ("T-Shirt", "Shirt", "Formal Shirt", "Jeans", "Chinos", "Kurta (Men)", "Sherwani",
+                    "Sports Jersey", "Track Pants", "Formal Shoes", "Tie", "Watch"):
+            self.assertIn(cat, values)
+
+    def test_categories_missing_gender_returns_nothing(self):
+        for gender in (None, "", "other"):
+            res = self._categories(gender)
+            self.assertEqual(res.status_code, 409)
+            self.assertNotIn("sections", res.get_json())
 
     def test_capabilities_endpoint(self):
         res = self.client.get("/api/wardrobe/capabilities",

@@ -32,7 +32,8 @@ export function useProfile() {
 export function ProfileChip({ itemCount }) {
   const profile = useProfile();
   const name = profile?.name || "";
-  const gender = profile?.gender || localStorage.getItem("gender") || "";
+  const raw = (profile?.gender || "").toLowerCase();
+  const gender = raw === "male" ? "Men" : raw === "female" ? "Women" : "";
   const initial = (name || "?").trim().charAt(0).toUpperCase();
 
   return (

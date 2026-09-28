@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import Layout from "../components/Layout";
 import { ProfileChip, useProfile } from "../components/PageHeader";
 import { OutfitDrawer, useOutfitActions } from "../components/Outfit";
+import StyleInspiration from "../components/Inspiration";
 import { assetUrl } from "../config";
 import "../styles/aw-v2.css";
 import { authGet, apiErrorMessage, isAuthError, OCCASIONS, occasionLabel, outfitTags, swatch } from "../lib/api";
@@ -189,7 +190,7 @@ function OutfitRecommendation() {
 
       <h2 className="aw-question">What are you looking for?</h2>
       <div className="aw-chips" role="tablist">
-        {TABS.map((t) => (
+        {TABS.filter((t) => (profile?.gender || "").toLowerCase() !== "male" || (t !== "Dresses" && t !== "Sarees")).map((t) => (
           <button key={t} type="button" role="tab" aria-selected={tab === t}
             className={`aw-chip ${tab === t ? "active" : ""}`} onClick={() => setTab(t)}>{t}</button>
         ))}
@@ -197,6 +198,9 @@ function OutfitRecommendation() {
 
       <div className="aw-row-head">
         <h2 className="aw-section-title" style={{ marginTop: 6 }}>{heading}</h2>
+        {data?.outfit_mode === "traditional" && (
+          <span className="aw-chip" title="Complete ethnic outfits with traditional footwear and accessories">Traditional mode</span>
+        )}
         {!loading && data && recs.length > 0 && <span className="aw-result-line">{recs.length} result{recs.length === 1 ? "" : "s"}</span>}
       </div>
 
@@ -225,19 +229,7 @@ function OutfitRecommendation() {
         </div>
       )}
 
-      {(data?.inspiration || []).length > 0 && (
-        <>
-          <h2 className="aw-section-title">{label} inspiration</h2>
-          <p className="aw-section-sub">Ideas on Pinterest (opens in a new tab). Your recommendations above always come from your own wardrobe.</p>
-          <div className="aw-inspo">
-            {data.inspiration.map((idea) => (
-              <a key={idea.pinterest_url} href={idea.pinterest_url} target="_blank" rel="noreferrer">
-                <span className="pin">P</span>{idea.title}
-              </a>
-            ))}
-          </div>
-        </>
-      )}
+      <StyleInspiration occasion={occasion} label={label} />
 
       <OutfitDrawer outfit={open} onClose={() => setOpen(null)} actions={actions} />
     </Layout>

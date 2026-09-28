@@ -4,6 +4,7 @@ import {
   GearIcon, LogoutIcon,
 } from "./Icons";
 import { clearProfileCache } from "./PageHeader";
+import { clearCategoryCache } from "../lib/categories";
 
 const NAV_ITEMS = [
   { to: "/dashboard", label: "Home", Icon: HomeIcon },
@@ -22,6 +23,7 @@ function Sidebar() {
     localStorage.removeItem("token");
     localStorage.removeItem("gender");
     clearProfileCache();
+    clearCategoryCache();
     navigate("/login");
   };
 

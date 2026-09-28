@@ -1,0 +1,728 @@
+{
+ "male": [
+  {
+   "name": "Tops",
+   "categories": [
+    {
+     "value": "T-Shirt",
+     "label": "T-Shirt",
+     "flags": []
+    },
+    {
+     "value": "Shirt",
+     "label": "Shirt",
+     "flags": []
+    },
+    {
+     "value": "Casual Shirt",
+     "label": "Casual Shirt",
+     "flags": []
+    },
+    {
+     "value": "Formal Shirt",
+     "label": "Formal Shirt",
+     "flags": []
+    },
+    {
+     "value": "Polo Shirt",
+     "label": "Polo Shirt",
+     "flags": []
+    },
+    {
+     "value": "Tank Top",
+     "label": "Tank Top",
+     "flags": []
+    }
+   ]
+  },
+  {
+   "name": "Bottoms",
+   "categories": [
+    {
+     "value": "Jeans",
+     "label": "Jeans / Denim",
+     "flags": []
+    },
+    {
+     "value": "Trousers",
+     "label": "Trousers / Pants",
+     "flags": []
+    },
+    {
+     "value": "Formal Trousers",
+     "label": "Formal Trousers",
+     "flags": []
+    },
+    {
+     "value": "Chinos",
+     "label": "Chinos",
+     "flags": []
+    },
+    {
+     "value": "Cargo Pants",
+     "label": "Cargo Pants",
+     "flags": []
+    },
+    {
+     "value": "Shorts",
+     "label": "Shorts",
+     "flags": []
+    }
+   ]
+  },
+  {
+   "name": "Traditional",
+   "categories": [
+    {
+     "value": "Kurta (Men)",
+     "label": "Kurta",
+     "flags": [
+      "styling"
+     ]
+    },
+    {
+     "value": "Kurta Set (Men)",
+     "label": "Kurta Set / Kurta Pajama",
+     "flags": [
+      "styling"
+     ]
+    },
+    {
+     "value": "Sherwani",
+     "label": "Sherwani",
+     "flags": []
+    },
+    {
+     "value": "Nehru Jacket",
+     "label": "Nehru Jacket",
+     "flags": []
+    },
+    {
+     "value": "Dhoti Pants",
+     "label": "Dhoti Pants",
+     "flags": []
+    },
+    {
+     "value": "Pajama",
+     "label": "Pajama / Churidar",
+     "flags": []
+    }
+   ]
+  },
+  {
+   "name": "Outerwear",
+   "categories": [
+    {
+     "value": "Jacket",
+     "label": "Jacket",
+     "flags": [
+      "material"
+     ]
+    },
+    {
+     "value": "Blazer",
+     "label": "Blazer",
+     "flags": [
+      "material"
+     ]
+    },
+    {
+     "value": "Coat",
+     "label": "Coat",
+     "flags": [
+      "material"
+     ]
+    },
+    {
+     "value": "Bomber Jacket",
+     "label": "Bomber Jacket",
+     "flags": [
+      "material"
+     ]
+    },
+    {
+     "value": "Denim Jacket",
+     "label": "Denim Jacket",
+     "flags": []
+    },
+    {
+     "value": "Leather Jacket",
+     "label": "Leather Jacket",
+     "flags": []
+    },
+    {
+     "value": "Hoodie",
+     "label": "Hoodie",
+     "flags": [
+      "material"
+     ]
+    },
+    {
+     "value": "Cardigan",
+     "label": "Cardigan / Sweater",
+     "flags": [
+      "material"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Activewear",
+   "categories": [
+    {
+     "value": "Sports T-Shirt",
+     "label": "Sports T-Shirt",
+     "flags": []
+    },
+    {
+     "value": "Sports Jersey",
+     "label": "Sports Jersey",
+     "flags": []
+    },
+    {
+     "value": "Track Pants",
+     "label": "Track Pants",
+     "flags": []
+    },
+    {
+     "value": "Joggers",
+     "label": "Joggers",
+     "flags": []
+    },
+    {
+     "value": "Athletic Shorts",
+     "label": "Athletic Shorts",
+     "flags": []
+    },
+    {
+     "value": "Track Jacket",
+     "label": "Track / Sports Jacket",
+     "flags": []
+    }
+   ]
+  },
+  {
+   "name": "Footwear",
+   "categories": [
+    {
+     "value": "Sneakers",
+     "label": "Sneakers",
+     "flags": []
+    },
+    {
+     "value": "Sports Shoes",
+     "label": "Sports Shoes",
+     "flags": []
+    },
+    {
+     "value": "Formal Shoes",
+     "label": "Formal Shoes",
+     "flags": []
+    },
+    {
+     "value": "Loafers",
+     "label": "Loafers",
+     "flags": []
+    },
+    {
+     "value": "Boots",
+     "label": "Boots",
+     "flags": []
+    },
+    {
+     "value": "Sandals",
+     "label": "Sandals",
+     "flags": []
+    },
+    {
+     "value": "Slides",
+     "label": "Slippers / Slides",
+     "flags": []
+    },
+    {
+     "value": "Mojaris (Men)",
+     "label": "Mojaris / Juttis",
+     "flags": []
+    }
+   ]
+  },
+  {
+   "name": "Accessories",
+   "categories": [
+    {
+     "value": "Belt",
+     "label": "Belt",
+     "flags": [
+      "material"
+     ]
+    },
+    {
+     "value": "Watch",
+     "label": "Watch",
+     "flags": [
+      "material"
+     ]
+    },
+    {
+     "value": "Bag",
+     "label": "Bag",
+     "flags": [
+      "material"
+     ]
+    },
+    {
+     "value": "Tie",
+     "label": "Tie",
+     "flags": []
+    },
+    {
+     "value": "Bow Tie",
+     "label": "Bow Tie",
+     "flags": []
+    },
+    {
+     "value": "Cap",
+     "label": "Cap / Hat",
+     "flags": []
+    },
+    {
+     "value": "Sunglasses",
+     "label": "Sunglasses",
+     "flags": []
+    },
+    {
+     "value": "Bracelet",
+     "label": "Bracelet / Kada",
+     "flags": [
+      "material"
+     ]
+    },
+    {
+     "value": "Chain",
+     "label": "Chain",
+     "flags": [
+      "material"
+     ]
+    },
+    {
+     "value": "Ring",
+     "label": "Ring",
+     "flags": [
+      "material"
+     ]
+    }
+   ]
+  }
+ ],
+ "female": [
+  {
+   "name": "Tops",
+   "categories": [
+    {
+     "value": "T-Shirt",
+     "label": "T-Shirt",
+     "flags": []
+    },
+    {
+     "value": "Shirt",
+     "label": "Shirt",
+     "flags": []
+    },
+    {
+     "value": "Tank Top",
+     "label": "Tank Top",
+     "flags": []
+    },
+    {
+     "value": "Top",
+     "label": "Top",
+     "flags": []
+    },
+    {
+     "value": "Crop Top",
+     "label": "Crop Top",
+     "flags": []
+    },
+    {
+     "value": "Camisole",
+     "label": "Camisole",
+     "flags": []
+    },
+    {
+     "value": "Tunic",
+     "label": "Tunic",
+     "flags": []
+    }
+   ]
+  },
+  {
+   "name": "Bottoms",
+   "categories": [
+    {
+     "value": "Jeans",
+     "label": "Jeans / Denim",
+     "flags": []
+    },
+    {
+     "value": "Trousers",
+     "label": "Trousers / Pants",
+     "flags": []
+    },
+    {
+     "value": "Wide-Leg Pants",
+     "label": "Wide-Leg Pants",
+     "flags": []
+    },
+    {
+     "value": "Shorts",
+     "label": "Shorts",
+     "flags": []
+    },
+    {
+     "value": "Skirt",
+     "label": "Skirt",
+     "flags": []
+    }
+   ]
+  },
+  {
+   "name": "Dresses",
+   "categories": [
+    {
+     "value": "Dress",
+     "label": "Dress",
+     "flags": []
+    },
+    {
+     "value": "Gown",
+     "label": "Gown",
+     "flags": []
+    },
+    {
+     "value": "Jumpsuit",
+     "label": "Jumpsuit",
+     "flags": []
+    },
+    {
+     "value": "Romper",
+     "label": "Romper",
+     "flags": []
+    }
+   ]
+  },
+  {
+   "name": "Traditional",
+   "categories": [
+    {
+     "value": "Saree",
+     "label": "Saree",
+     "flags": [
+      "styling"
+     ]
+    },
+    {
+     "value": "Casual Saree",
+     "label": "Casual Saree",
+     "flags": []
+    },
+    {
+     "value": "Wedding Saree",
+     "label": "Wedding Saree",
+     "flags": []
+    },
+    {
+     "value": "Lehenga",
+     "label": "Lehenga",
+     "flags": [
+      "styling"
+     ]
+    },
+    {
+     "value": "Salwar Suit",
+     "label": "Salwar Suit",
+     "flags": [
+      "styling"
+     ]
+    },
+    {
+     "value": "Kurta (Women)",
+     "label": "Kurta / Kurti",
+     "flags": [
+      "styling"
+     ]
+    },
+    {
+     "value": "Kurta Set (Women)",
+     "label": "Kurta Set",
+     "flags": [
+      "styling"
+     ]
+    },
+    {
+     "value": "Anarkali",
+     "label": "Anarkali",
+     "flags": [
+      "styling"
+     ]
+    },
+    {
+     "value": "Salwar",
+     "label": "Salwar / Churidar",
+     "flags": []
+    },
+    {
+     "value": "Palazzos",
+     "label": "Palazzos",
+     "flags": []
+    },
+    {
+     "value": "Sharara",
+     "label": "Sharara",
+     "flags": []
+    },
+    {
+     "value": "Dupatta",
+     "label": "Dupatta",
+     "flags": []
+    },
+    {
+     "value": "Blouse",
+     "label": "Saree / Lehenga Blouse",
+     "flags": []
+    }
+   ]
+  },
+  {
+   "name": "Outerwear",
+   "categories": [
+    {
+     "value": "Jacket",
+     "label": "Jacket",
+     "flags": [
+      "material"
+     ]
+    },
+    {
+     "value": "Blazer",
+     "label": "Blazer",
+     "flags": [
+      "material"
+     ]
+    },
+    {
+     "value": "Coat",
+     "label": "Coat",
+     "flags": [
+      "material"
+     ]
+    },
+    {
+     "value": "Denim Jacket",
+     "label": "Denim Jacket",
+     "flags": []
+    },
+    {
+     "value": "Leather Jacket",
+     "label": "Leather Jacket",
+     "flags": []
+    },
+    {
+     "value": "Hoodie",
+     "label": "Hoodie",
+     "flags": [
+      "material"
+     ]
+    },
+    {
+     "value": "Cardigan",
+     "label": "Cardigan / Sweater",
+     "flags": [
+      "material"
+     ]
+    },
+    {
+     "value": "Shrug",
+     "label": "Shrug",
+     "flags": [
+      "material"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Activewear",
+   "categories": [
+    {
+     "value": "Sports T-Shirt",
+     "label": "Sports T-Shirt",
+     "flags": []
+    },
+    {
+     "value": "Sports Jersey",
+     "label": "Sports Jersey",
+     "flags": []
+    },
+    {
+     "value": "Track Pants",
+     "label": "Track Pants",
+     "flags": []
+    },
+    {
+     "value": "Joggers",
+     "label": "Joggers",
+     "flags": []
+    },
+    {
+     "value": "Athletic Shorts",
+     "label": "Athletic Shorts",
+     "flags": []
+    },
+    {
+     "value": "Leggings",
+     "label": "Leggings",
+     "flags": []
+    },
+    {
+     "value": "Track Jacket",
+     "label": "Track / Sports Jacket",
+     "flags": []
+    }
+   ]
+  },
+  {
+   "name": "Footwear",
+   "categories": [
+    {
+     "value": "Sneakers",
+     "label": "Sneakers",
+     "flags": []
+    },
+    {
+     "value": "Sports Shoes",
+     "label": "Sports Shoes",
+     "flags": []
+    },
+    {
+     "value": "Formal Shoes",
+     "label": "Formal Shoes",
+     "flags": []
+    },
+    {
+     "value": "Loafers",
+     "label": "Loafers",
+     "flags": []
+    },
+    {
+     "value": "Boots",
+     "label": "Boots",
+     "flags": []
+    },
+    {
+     "value": "Sandals",
+     "label": "Sandals",
+     "flags": []
+    },
+    {
+     "value": "Heels",
+     "label": "Heels",
+     "flags": []
+    },
+    {
+     "value": "Flats",
+     "label": "Flats",
+     "flags": []
+    },
+    {
+     "value": "Mojaris (Women)",
+     "label": "Mojaris / Juttis",
+     "flags": []
+    }
+   ]
+  },
+  {
+   "name": "Accessories",
+   "categories": [
+    {
+     "value": "Belt",
+     "label": "Belt",
+     "flags": [
+      "material"
+     ]
+    },
+    {
+     "value": "Watch",
+     "label": "Watch",
+     "flags": [
+      "material"
+     ]
+    },
+    {
+     "value": "Bag",
+     "label": "Bag",
+     "flags": [
+      "material"
+     ]
+    },
+    {
+     "value": "Handbag",
+     "label": "Handbag",
+     "flags": [
+      "material"
+     ]
+    },
+    {
+     "value": "Clutch",
+     "label": "Clutch / Potli",
+     "flags": [
+      "material"
+     ]
+    },
+    {
+     "value": "Cap",
+     "label": "Cap / Hat",
+     "flags": []
+    },
+    {
+     "value": "Sunglasses",
+     "label": "Sunglasses",
+     "flags": []
+    },
+    {
+     "value": "Earrings",
+     "label": "Earrings",
+     "flags": [
+      "material"
+     ]
+    },
+    {
+     "value": "Necklace",
+     "label": "Necklace / Chain",
+     "flags": [
+      "material"
+     ]
+    },
+    {
+     "value": "Ring",
+     "label": "Ring",
+     "flags": [
+      "material"
+     ]
+    },
+    {
+     "value": "Bangles",
+     "label": "Bracelet / Bangles",
+     "flags": [
+      "material"
+     ]
+    },
+    {
+     "value": "Head Accessory",
+     "label": "Head Accessory",
+     "flags": [
+      "material"
+     ]
+    }
+   ]
+  }
+ ]
+}

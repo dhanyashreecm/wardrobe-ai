@@ -29,6 +29,8 @@ from backend.wardrobe import (
     delete_all_for_user as delete_all_wardrobe_for_user,
 )
 from backend.category_gender import is_allowed_for_account
+from backend import category_catalog
+from backend import inspiration as inspiration_library
 from backend.garment_taxonomy import model_may_override
 from backend.clothing_similarity import find_similar
 from backend.indofashion_similarity import find_similar_indofashion
@@ -36,7 +38,8 @@ from backend.indofashion_classifier import predict_category
 from backend.weather import get_weather, get_weather_forecast
 from backend.trip_planner import plan_trip
 from backend.trips import save_trip, get_user_trips, delete_all_for_user as delete_all_trips_for_user
-from backend.color_detection import detect_dominant_color, detect_colors
+from backend.color_detection import detect_dominant_color, detect_colors, detect_colors_from_pixels
+from backend import image_pipeline
 from backend.item_attributes import describe_item
 from backend import config, storage
 from backend.db import ping as ping_database, ensure_indexes
@@ -46,10 +49,14 @@ from backend import garment_classifier
 from backend import recommend_service
 from backend import outfit_presentation
 from backend import item_recommender
+from backend import virtual_tryon, tryon_store, tryon_orchestrator
+from backend.outfit_builder import occasion_mode as outfit_builder_mode
 
 import os
 import uuid
 import traceback
+import io
+import threading
 from datetime import timedelta
 import shutil
 from werkzeug.utils import secure_filename
@@ -485,6 +492,53 @@ def dashboard():
 # ADD WARDROBE ITEM
 # =========================================================
 
+@app.route("/api/wardrobe/categories", methods=["GET"])
+@jwt_required()
+def wardrobe_categories():
+    """The category list for THIS account's saved gender (one catalogue)."""
+    gender = category_catalog.normalize_gender(get_user_gender(current_user_email()))
+    if not gender:
+        return jsonify({
+            "success": False,
+            "message": "Your account has no gender set - choose Men or Women in Profile.",
+        }), 409
+    return jsonify({
+        "success": True,
+        "gender": gender,
+        "sections": category_catalog.categories_for(gender),
+    }), 200
+
+
+# =========================================================
+# STYLE INSPIRATION - reference pictures for the chosen occasion,
+# for the account's own gender only. Pictures only: no source links,
+# and never mixed into the user's outfits.
+# =========================================================
+
+@app.route("/api/inspiration", methods=["GET"])
+@jwt_required()
+def style_inspiration():
+    gender = category_catalog.normalize_gender(get_user_gender(current_user_email()))
+    occasion = resolve_occasion_query(request.args.get("occasion", "casual"))
+    images = inspiration_library.for_account(gender, occasion)
+    return jsonify({
+        "success": True,
+        "occasion": occasion,
+        "label": outfit_presentation.occasion_label(occasion),
+        "images": images,
+    }), 200
+
+
+@app.route("/api/inspiration/image/<image_id>", methods=["GET"])
+@jwt_required()
+def inspiration_image(image_id):
+    gender = category_catalog.normalize_gender(get_user_gender(current_user_email()))
+    path = inspiration_library.local_file(image_id, gender)
+    if not path:
+        return jsonify({"success": False, "message": "Not found"}), 404
+    return send_from_directory(os.path.dirname(path), os.path.basename(path))
+
+
 @app.route("/api/wardrobe/capabilities", methods=["GET"])
 @jwt_required()
 def wardrobe_capabilities():
@@ -566,6 +620,14 @@ def _add_wardrobe_item():
     # overriding a Male account's category - see get_user_gender().
     account_gender = get_user_gender(user_email)
 
+    # The account's saved gender (Atlas, never the browser) decides
+    # which categories exist for this wardrobe.
+    if not category_catalog.normalize_gender(account_gender):
+        return jsonify({
+            "success": False,
+            "message": "Please set your account to Men or Women in Profile before adding clothes.",
+        }), 409
+
     manual_category = request.form.get("category")
 
     # Did the user actually PICK this category, or is it just the
@@ -612,6 +674,35 @@ def _add_wardrobe_item():
     filename = safe_upload_filename(image.filename)
     path = os.path.join(folder_path, filename)
     image.save(path)
+
+    # -----------------------------------------------------
+    # Clean the photo: garment only, on white (image_pipeline).
+    # Everything after this - classifier, colour, storage - works on
+    # the processed image. The untouched original is kept alongside.
+    # -----------------------------------------------------
+    original_path = path
+    garment_px = None
+    processing = {"background_removed": False, "engine": None, "warnings": []}
+    try:
+        cleaned = image_pipeline.process_clothing_photo(path)
+    except image_pipeline.ImageRejected as error:
+        return jsonify({"success": False, "message": str(error)}), 400
+    except Exception as error:  # never block an upload on this step
+        print(f"Background removal failed for {filename}: {error}")
+        cleaned = None
+    if cleaned is not None:
+        processed_name = os.path.splitext(filename)[0] + "_clean.jpg"
+        processed_path = os.path.join(folder_path, processed_name)
+        cleaned["image"].save(processed_path, "JPEG", quality=92)
+        path, filename = processed_path, processed_name
+        processing = {
+            "background_removed": cleaned["background_removed"],
+            "engine": cleaned["engine"],
+            "warnings": cleaned["warnings"],
+        }
+        if cleaned["background_removed"]:
+            garment_px = image_pipeline.garment_pixels(cleaned["image"], cleaned["mask"])
+        print(f"Image cleaned for {filename}: {processing}")
 
     # The permanent (cloud) upload now happens AFTER category and
     # colour are settled - previously a photo was pushed to Cloudinary
@@ -668,21 +759,28 @@ def _add_wardrobe_item():
             print(f"Garment classifier failed for {filename}: {e}")
 
         if prediction:
-            detected_category = prediction["category"]
-            category_confidence = prediction["confidence"]
             print(
-                f"Garment classifier: {filename} -> {detected_category} "
-                f"({category_confidence:.2f}); top: {prediction['top']}"
+                f"Garment classifier: {filename} -> {prediction['category']} "
+                f"({prediction['confidence']:.2f}); top: {prediction['top']}"
             )
-            # Not sure? Save the best guess but offer the runner-up
-            # for one-click correction.
-            if (
-                category_confidence < GARMENT_CONFIDENCE_THRESHOLD
-                and len(prediction["top"]) > 1
-            ):
-                suggested_category = prediction["top"][1][0]
-                suggestion_confidence = prediction["top"][1][1]
-                suggestion_reason = "the AI wasn't sure - it could also be this"
+            # The model decides only when its class means exactly one
+            # category for this gender and it is reliable and confident
+            # (category_catalog.classifier_decision). Otherwise the user
+            # picks from that family - nothing is saved yet.
+            decision = category_catalog.classifier_decision(
+                prediction, account_gender, GARMENT_CONFIDENCE_THRESHOLD
+            )
+            if decision.get("category"):
+                detected_category = decision["category"]
+                category_confidence = prediction["confidence"]
+            else:
+                return jsonify({
+                    "success": False,
+                    "needs_category": True,
+                    "message": decision["reason"] + ".",
+                    "options": decision["choose"],
+                    "guess": decision["guess"],
+                }), 422
 
     if (
         detected_category is None
@@ -783,7 +881,11 @@ def _add_wardrobe_item():
     # "color" field keeps exactly its old meaning - a single name that
     # colour-harmony scoring understands - while the richer reading
     # travels alongside it.
-    color_analysis = detect_colors(path)
+    # With the background removed, only the garment's own pixels are
+    # used - the white canvas can't be mistaken for part of the item.
+    color_analysis = (
+        detect_colors_from_pixels(garment_px) if garment_px else detect_colors(path)
+    )
 
     if manual_color:
         final_color = manual_color
@@ -839,6 +941,23 @@ def _add_wardrobe_item():
                 "Couldn't recognise this item automatically - please "
                 "choose its category from the list and upload again."
         }), 400
+
+    # HARD RULE: the category must belong to this account's gender
+    # (backend/category_catalog.py). Never saved otherwise.
+    if not category_catalog.is_valid_for(final_category, account_gender):
+        wardrobe_word = "men's" if category_catalog.normalize_gender(account_gender) == "male" else "women's"
+        return jsonify({
+            "success": False,
+            "message": f"\"{final_category}\" isn't one of the {wardrobe_word} wardrobe categories - "
+                       "please choose a category from the list.",
+        }), 400
+    final_category = category_catalog.canonical_for_gender(final_category, account_gender)
+    if suggested_category and category_catalog.is_valid_for(suggested_category, account_gender):
+        suggested_category = category_catalog.canonical_for_gender(suggested_category, account_gender)
+        if suggested_category == final_category:
+            suggested_category = None
+    else:
+        suggested_category = None
     # -----------------------------------------------------
     # Store wardrobe item
     # -----------------------------------------------------
@@ -864,10 +983,22 @@ def _add_wardrobe_item():
                 "message": "Upload failed: the image could not be stored in the "
                            f"cloud (Cloudinary said: {reason}). Nothing was saved - please try again.",
             }), 502
+        # The untouched original is kept too (so a bad cut-out can be
+        # undone later). Optional and never fatal.
+        original_url = None
+        if original_path != path and os.environ.get("KEEP_ORIGINAL_PHOTOS", "true").lower() != "false":
+            try:
+                original_url = storage.upload_local_file(original_path, user_email, kind="originals")
+            except storage.StorageError as error:
+                print(f"Original photo not kept for {filename}: {error}")
     else:
         # Only when Cloudinary is not configured at all (config.py
         # already warns at startup that images then stay on this Mac).
         image_url = f"/api/uploads/{folder_name}/{filename}"
+        original_url = (
+            f"/api/uploads/{folder_name}/{os.path.basename(original_path)}"
+            if original_path != path else None
+        )
 
     attributes = describe_item(
         final_category,
@@ -876,6 +1007,8 @@ def _add_wardrobe_item():
         material=material,
         manual_occasion=occasion,
     )
+    if isinstance(attributes, dict):
+        attributes["image_processing"] = dict(processing, original_image=original_url)
 
     item_id = add_item(
         user_email,
@@ -885,7 +1018,8 @@ def _add_wardrobe_item():
         occasion,
         material,
         styling,
-        attributes
+        attributes,
+        gender=category_catalog.normalize_gender(account_gender),
     )
 
 
@@ -921,6 +1055,11 @@ def _add_wardrobe_item():
         "styling": styling,
 
         "image": image_url,
+
+        # Background removal outcome, shown after upload.
+        "background_removed": processing["background_removed"],
+
+        "image_warnings": processing["warnings"],
 
         # What the model thought, when it was not entitled to act on
         # it by itself. The frontend shows this as "the AI thinks this
@@ -1097,6 +1236,17 @@ def update_wardrobe_item(item_id):
     user_email = current_user_email()
 
     data = request.json or {}
+
+    # Editing a category is held to the same rule as uploading one.
+    new_category = (data.get("category") or "").strip()
+    if new_category:
+        account_gender = get_user_gender(user_email)
+        if not category_catalog.is_valid_for(new_category, account_gender):
+            return jsonify({
+                "success": False,
+                "message": f"\"{new_category}\" isn't a category for this wardrobe.",
+            }), 400
+        data = dict(data, category=category_catalog.canonical_for_gender(new_category, account_gender))
 
     updated = update_item(
         item_id,
@@ -1504,7 +1654,7 @@ def recommend_outfit():
                 "heading": f"{category_tab} for {label}",
                 "recommendations": items,
                 "notes": item_notes,
-                "inspiration": outfit_presentation.occasion_inspiration(canonical_occasion, account_gender),
+                "outfit_mode": outfit_builder_mode(canonical_occasion),
                 "weather": weather,
                 "weather_error": weather_error,
                 "used_saved_city": used_saved_city,
@@ -1513,7 +1663,7 @@ def recommend_outfit():
         # Colour/Style filters, then the FINAL VALIDATOR: every outfit
         # is re-checked against this user's stored wardrobe (exists,
         # has an image, right gender, complete, right occasion) before
-        # it can reach the browser. Also adds titles and inspiration.
+        # it can reach the browser. Also adds titles and style tags.
         recommendations, engine_notes = recommend_service.finalize(
             recommendations,
             wardrobe_items,
@@ -1553,13 +1703,9 @@ def recommend_outfit():
             "heading": (f"Complete Looks for {label}" if category_tab == "Full Looks"
                         else f"Outfits for {label}"),
 
-            # Pinterest SEARCH links for this occasion - styling ideas
-            # only; the outfits above always come from the user's own
-            # wardrobe. Plain links, so nothing breaks if Pinterest is
-            # unreachable.
-            "inspiration": outfit_presentation.occasion_inspiration(
-                resolve_occasion_query(occasion), account_gender
-            ),
+            # "traditional" = complete ethnic outfits; "western" = top +
+            # bottom / dress looks. Every look is from the user's wardrobe.
+            "outfit_mode": outfit_builder_mode(resolve_occasion_query(occasion)),
 
             "weather": weather,
 
@@ -1944,6 +2090,549 @@ def outfit_history():
 
 
 # =========================================================
+# VIRTUAL TRY-ON
+#
+# The model runs on a GPU elsewhere (see virtual_tryon.py for why and
+# which model). These routes are the boring, important half: they
+# check who is asking, keep one person's photographs away from
+# everybody else's, and turn a 30-second GPU job into something a
+# browser can wait for without appearing to hang.
+#
+# EVERY route here is @jwt_required() and every database call passes
+# the caller's own email, taken from the token rather than from the
+# request body. A try-on result is a picture of somebody's body; the
+# identifier for one appears in a URL. Nothing here can be reached by
+# guessing an id.
+# =========================================================
+
+@app.route("/api/tryon/capability", methods=["GET"])
+@jwt_required()
+def tryon_capability():
+    """
+    What the Try-On page can offer right now, so the interface can say
+    something useful instead of letting the user fill in a form that
+    was never going to work.
+    """
+    photo = tryon_store.get_photo(current_user_email())
+
+    # One question for the orchestrator: which provider (if any) would
+    # run a try-on now, and what should the user be told.
+    summary = tryon_orchestrator.status_summary()
+    engine = summary["engine"]
+    available = summary["available"]
+
+    return jsonify({
+        "success": True,
+        "available": available,
+        # ready | fallback | unavailable | not_configured
+        "status": summary["status"],
+        "message": summary["message"],
+        "reason": summary["reason"],
+        # Setting NAMES only, and only when nothing is configured at all.
+        # Values - tokens, Space ids, share links - never leave the
+        # server, and neither do provider names.
+        "missing_configuration": (
+            virtual_tryon.missing_configuration()
+            if summary["status"] == "not_configured" else []
+        ),
+        "has_photo": bool(photo),
+        "photo_url": (photo or {}).get("image_url"),
+        "max_upload_mb": config.TRYON_MAX_UPLOAD_MB,
+        # One garment per try-on, or a layered outfit (top + bottom +
+        # jacket) built one pass at a time - whichever the provider
+        # can actually do.
+        "max_garments": engine.max_passes() if engine else 1,
+        "supports_full_outfit": bool(engine and engine.supports_layering),
+        "photo_guidance": [
+            "Stand facing the camera, with your whole body (or at least "
+            "down to your knees) in frame.",
+            "Use good, even light - a bright window behind you makes it harder.",
+            "Keep arms relaxed and away from the clothes you want to replace.",
+            "One person in the photo, with a plain background if you can.",
+        ],
+    }), 200
+
+
+@app.route("/api/tryon/garments", methods=["GET"])
+@jwt_required()
+def tryon_garments():
+    """
+    The caller's OWN wardrobe, each item labelled with whether it can
+    be tried on and, if not, why.
+
+    Owner comes from the JWT. Items whose category belongs to the other
+    gender (per category_catalog) are left out, so a men's account
+    never sees women's garments here and vice versa.
+    """
+    user_email = current_user_email()
+    gender = category_catalog.normalize_gender(get_user_gender(user_email))
+
+    # Support is judged against the provider that would actually run.
+    engine = tryon_orchestrator.active()
+
+    garments = []
+
+    for item in get_user_wardrobe(user_email):
+
+        category = item.get("category", "")
+        genders = category_catalog.genders_of(category)
+
+        if gender and genders and gender not in genders:
+            continue
+
+        support = virtual_tryon.garment_support_for(category, engine)
+        presented = outfit_presentation.present_item(dict(item))
+
+        garments.append({
+            "_id": str(item.get("_id")),
+            "category": category,
+            "display_name": presented.get("display_name") or category,
+            "color": item.get("color", ""),
+            "image_path": virtual_tryon.item_image(item),
+            "tryon": {
+                "supported": support["supported"],
+                "slot": support["slot"],
+                "shown_beside": virtual_tryon.is_accessory_like(category),
+                "reason": support["reason"],
+            },
+        })
+
+    return jsonify({"success": True, "items": garments}), 200
+
+
+@app.route("/api/tryon/photo", methods=["GET"])
+@jwt_required()
+def get_tryon_photo():
+
+    photo = tryon_store.get_photo(current_user_email())
+
+    return jsonify({
+        "success": True,
+        "photo_url": (photo or {}).get("image_url"),
+        "width": (photo or {}).get("width"),
+        "height": (photo or {}).get("height"),
+    }), 200
+
+
+def _is_different_image(previous, details, new_url):
+    """
+    Whether `previous` refers to different stored bytes from the image
+    just saved - i.e. whether deleting it would be safe.
+
+    Compares storage identity rather than the URL alone, because
+    Cloudinary and local storage identify an image differently: one by
+    public_id, the other by filesystem path.
+    """
+    details = details or {}
+
+    if previous.get("public_id") or details.get("public_id"):
+        return previous.get("public_id") != details.get("public_id")
+
+    if previous.get("local_path") or details.get("local_path"):
+        return previous.get("local_path") != details.get("local_path")
+
+    return previous.get("image_url") != new_url
+
+
+@app.route("/api/tryon/photo", methods=["POST"])
+@jwt_required()
+def upload_tryon_photo():
+    """
+    Stores the photo the user will be dressed in. One per account:
+    uploading a new one replaces and deletes the old.
+    """
+    user_email = current_user_email()
+
+    image = request.files.get("image")
+
+    if not image:
+        return jsonify({"success": False, "message": "No image provided"}), 400
+
+    if not (image.content_type or "").startswith("image/"):
+        return jsonify({
+            "success": False,
+            "message": "Please upload an image file - a JPEG or PNG photo.",
+        }), 400
+
+    image.stream.seek(0)
+    image_bytes = image.stream.read()
+    image.stream.seek(0)
+
+    if len(image_bytes) > config.TRYON_MAX_UPLOAD_MB * 1024 * 1024:
+        return jsonify({
+            "success": False,
+            "message":
+                f"That photo is larger than the {config.TRYON_MAX_UPLOAD_MB} MB "
+                "limit. Please choose a smaller copy.",
+            "problems": [
+                f"That photo is larger than the {config.TRYON_MAX_UPLOAD_MB} MB "
+                "limit. Please choose a smaller copy."
+            ],
+        }), 413
+
+    # Checked BEFORE anything is stored, so an unusable photo never
+    # reaches the database or costs an upload.
+    problems = virtual_tryon.check_person_photo(image_bytes)
+
+    if problems:
+        return jsonify({
+            "success": False,
+            "message": " ".join(problems),
+            "problems": problems,
+        }), 400
+
+    width = height = None
+
+    try:
+        from PIL import Image
+        width, height = Image.open(io.BytesIO(image_bytes)).size
+    except Exception:
+        pass
+
+    try:
+        url, details = storage.save_image(image, user_email, kind="tryon-person")
+    except storage.StorageError as error:
+        print(f"Try-on photo upload failed: {error}")
+        return jsonify({
+            "success": False,
+            "message":
+                "Couldn't save your photo. Please check your connection and "
+                "try again.",
+        }), 502
+
+    _, previous = tryon_store.set_photo(
+        user_email, url, details, width=width, height=height
+    )
+
+    # Clean up the photo this one replaced - but ONLY if it is
+    # actually a different image.
+    #
+    # With local storage, an upload keeps its original filename, so
+    # re-uploading "me.jpg" writes over the previous "me.jpg". The
+    # previous record then points at the very file that was just
+    # written, and deleting it would destroy the new photo while
+    # leaving a database row insisting it exists. The user would see a
+    # broken image and every try-on would fail with "your photo could
+    # not be loaded".
+    if previous and _is_different_image(previous, details, url):
+        storage.delete_image(previous)
+
+    return jsonify({"success": True, "photo_url": url}), 200
+
+
+@app.route("/api/tryon/photo", methods=["DELETE"])
+@jwt_required()
+def delete_tryon_photo():
+
+    removed = tryon_store.delete_photo(current_user_email())
+
+    if not removed:
+        return jsonify({"success": False, "message": "No photo on file"}), 404
+
+    storage.delete_image(removed)
+
+    return jsonify({"success": True}), 200
+
+
+def _wardrobe_items_by_ids(user_email, item_ids):
+    """
+    The caller's OWN wardrobe items matching these ids, in the order
+    the ids were given.
+
+    Ownership is structural rather than checked: this only ever looks
+    inside get_user_wardrobe(user_email), so an id belonging to
+    somebody else simply does not match anything. Ids that match
+    nothing are returned separately so the route can say which item
+    went missing rather than silently trying on fewer clothes than
+    the user asked for.
+    """
+    wanted = [str(identifier) for identifier in item_ids]
+
+    owned = {
+        str(item.get("_id")): item
+        for item in get_user_wardrobe(user_email)
+    }
+
+    found = [owned[key] for key in wanted if key in owned]
+    missing = [key for key in wanted if key not in owned]
+
+    return found, missing
+
+
+def _person_photo_bytes(user_email):
+    """The stored photo as bytes, wherever storage put it."""
+    photo = tryon_store.get_photo(user_email)
+
+    if not photo:
+        raise virtual_tryon.PhotoUnsuitable(
+            "Upload a photo of yourself first."
+        )
+
+    url = photo.get("image_url") or ""
+
+    if storage.is_remote_url(url):
+        path = storage.local_copy_of(url)
+    else:
+        path = photo.get("local_path")
+
+    if not path or not os.path.isfile(path):
+        raise virtual_tryon.PhotoUnsuitable(
+            "Your photo could not be loaded. Please upload it again."
+        )
+
+    with open(path, "rb") as handle:
+        return handle.read()
+
+
+def _run_tryon_job(job_id, user_email, items):
+    """
+    The actual generation, on a background thread.
+
+    Runs off the request thread because one pass takes 20-60 seconds
+    and a full outfit takes two: an HTTP request held open that long
+    dies in proxies and looks like a frozen application. Progress and
+    the result go into MongoDB, which the browser polls - and which
+    means a restart mid-generation surfaces as an honest "this was
+    interrupted" rather than a spinner that never stops.
+
+    Nothing in here may raise. A thread that dies silently leaves a
+    job stuck in RUNNING forever, so every failure ends in
+    mark_failed with a sentence written for the user.
+    """
+    try:
+        person_bytes = _person_photo_bytes(user_email)
+
+        def report(step, total, message):
+            tryon_store.mark_running(job_id, user_email, step, total, message)
+
+        tryon_store.mark_running(job_id, user_email, 0, 0, "Starting")
+
+        image_bytes, outcome = virtual_tryon.generate_outfit(
+            person_bytes, items, on_progress=report
+        )
+
+        tryon_store.mark_running(
+            job_id, user_email,
+            outcome.get("passes", 1), outcome.get("passes", 1),
+            "Saving your try-on",
+        )
+
+        url, details = storage.save_bytes(
+            image_bytes, user_email,
+            kind="tryon-result",
+            filename_hint=f"tryon_{job_id}.png",
+        )
+
+        tryon_store.mark_done(job_id, user_email, url, details, outcome)
+
+    except virtual_tryon.PhotoUnsuitable as error:
+        tryon_store.mark_failed(job_id, user_email, str(error),
+                                code=virtual_tryon.UNSUPPORTED_INPUT)
+
+    except virtual_tryon.TryOnUnavailable as error:
+        # str() is the user-safe sentence; .detail is for us and never
+        # reaches the browser.
+        print(f"Try-on unavailable for job {job_id} ({error.state}): {error.detail}")
+        tryon_store.mark_failed(job_id, user_email, str(error), code=error.state)
+
+    except storage.StorageError as error:
+        print(f"Try-on storage failed for job {job_id}: {error}")
+        tryon_store.mark_failed(
+            job_id, user_email,
+            "The try-on worked but the image couldn't be saved. Please try "
+            "again.",
+        )
+
+    except Exception as error:  # noqa: BLE001 - a dead thread strands the job
+        print(f"Try-on job {job_id} failed unexpectedly: {type(error).__name__}")
+        tryon_store.mark_failed(
+            job_id, user_email,
+            "Something went wrong generating your try-on. Please try again.",
+        )
+
+
+@app.route("/api/tryon/generate", methods=["POST"])
+@jwt_required()
+def start_tryon():
+    """
+    Begins a try-on and returns a job id to poll.
+
+    `item_ids` are wardrobe items - the SAME ids the recommendation
+    endpoint already returns, which is what lets the "Virtual Try-On"
+    button on a recommended outfit work without the user picking
+    anything again.
+    """
+    user_email = current_user_email()
+
+    data = request.get_json(silent=True) or {}
+
+    item_ids = data.get("item_ids") or []
+
+    if (
+        not isinstance(item_ids, list)
+        or not item_ids
+        or not all(isinstance(value, str) and 0 < len(value) <= 64 for value in item_ids)
+    ):
+        return jsonify({
+            "success": False,
+            "message": "Choose at least one clothing item to try on.",
+        }), 400
+
+    if len(item_ids) > 6:
+        return jsonify({
+            "success": False,
+            "message": "That's too many items for one try-on.",
+        }), 400
+
+    summary = tryon_orchestrator.status_summary()
+    engine = summary["engine"]
+
+    def _no_provider_response():
+        not_configured = summary["status"] == "not_configured"
+        return jsonify({
+            "success": False,
+            "code": "not_configured" if not_configured else "unavailable",
+            "message": summary["message"],
+            "reason": summary["reason"],
+            "missing_configuration": (
+                virtual_tryon.missing_configuration() if not_configured else []
+            ),
+        }), 503
+
+    if summary["status"] == "not_configured":
+        return _no_provider_response()
+
+    if not tryon_store.get_photo(user_email):
+        return jsonify({
+            "success": False,
+            "message": "Upload a photo of yourself first.",
+        }), 400
+
+    items, missing = _wardrobe_items_by_ids(user_email, item_ids)
+
+    if missing:
+        # Same answer whether the id never existed or belongs to
+        # somebody else - which of the two is none of the caller's
+        # business.
+        return jsonify({
+            "success": False,
+            "message":
+                "Some of those clothes are no longer in your wardrobe. "
+                "Refresh and pick again.",
+        }), 404
+
+    gender = category_catalog.normalize_gender(get_user_gender(user_email))
+
+    for item in items:
+        genders = category_catalog.genders_of(item.get("category", ""))
+        if gender and genders and gender not in genders:
+            return jsonify({
+                "success": False,
+                "code": "unsupported_garment",
+                "message":
+                    f"'{item.get('category')}' isn't part of this account's "
+                    "wardrobe categories, so it can't be tried on.",
+            }), 400
+
+    # Checked before a job is created, so an unsupported garment or an
+    # impossible combination is answered immediately and nothing is
+    # sent to the model.
+    # Garments are judged against the provider that would run the job,
+    # or the primary one while every provider is cooling down - so an
+    # unsupported garment always gets its real answer, not "try later".
+    planner = engine or tryon_orchestrator.primary()
+    passes, not_applied, problems = virtual_tryon.plan_outfit(
+        items, max_passes=planner.max_passes()
+    )
+
+    if problems:
+        return jsonify({
+            "success": False,
+            "code": "unsupported_garment",
+            "message": " ".join(problems),
+        }), 400
+
+    # Every configured provider is cooling down (quota, queue, asleep...).
+    # Nothing is submitted and no job is created - no fake result.
+    if engine is None:
+        return _no_provider_response()
+
+    job_id = tryon_store.create_job(
+        user_email,
+        [str(item.get("_id")) for item in items],
+        source=str(data.get("source") or "manual")[:40],
+        occasion=str(data.get("occasion") or "")[:60],
+        label=str(data.get("label") or "")[:120],
+    )
+
+    threading.Thread(
+        target=_run_tryon_job,
+        args=(job_id, user_email, items),
+        daemon=True,
+        name=f"tryon-{job_id[:8]}",
+    ).start()
+
+    return jsonify({
+        "success": True,
+        "job_id": job_id,
+        "total_steps": len(passes),
+        # Sent up front so the interface can warn that a full outfit
+        # takes two generations before the user starts waiting.
+        "estimated_seconds": 25 * len(passes),
+        "not_applied": [
+            {
+                "item_id": str(entry["item"].get("_id", "")),
+                "category": entry["item"].get("category", ""),
+                "image_url": virtual_tryon.item_image(entry["item"]),
+                "reason": entry["reason"],
+            }
+            for entry in not_applied
+        ],
+    }), 202
+
+
+@app.route("/api/tryon/status/<job_id>", methods=["GET"])
+@jwt_required()
+def tryon_status(job_id):
+
+    job = tryon_store.get_job(job_id, current_user_email())
+
+    if not job:
+        return jsonify({"success": False, "message": "No such try-on"}), 404
+
+    return jsonify({
+        "success": True,
+        "job": tryon_store.public_view(job),
+    }), 200
+
+
+@app.route("/api/tryon/results", methods=["GET"])
+@jwt_required()
+def list_tryon_results():
+
+    results = tryon_store.list_results(current_user_email())
+
+    return jsonify({
+        "success": True,
+        "results": [tryon_store.public_view(job) for job in results],
+    }), 200
+
+
+@app.route("/api/tryon/result/<job_id>", methods=["DELETE"])
+@jwt_required()
+def delete_tryon_result(job_id):
+
+    removed = tryon_store.delete_result(job_id, current_user_email())
+
+    if not removed:
+        return jsonify({"success": False, "message": "No such try-on"}), 404
+
+    storage.delete_image(removed)
+
+    return jsonify({"success": True}), 200
+
+
+# =========================================================
 # HOME PAGE - everything built from the user's real wardrobe
 # =========================================================
 
@@ -1999,6 +2688,13 @@ def delete_account():
     delete_all_wardrobe_for_user(user_email)
     delete_all_trips_for_user(user_email)
     outfit_feedback.delete_all_for_user(user_email)
+
+    # Photographs of a person's body must not outlive the account
+    # they belonged to. The records go first, then the images
+    # themselves - best effort on the images, because a Cloudinary
+    # hiccup must not leave the account half-deleted.
+    for leftover in tryon_store.delete_all_for_user(user_email):
+        storage.delete_image(leftover)
 
     _, folder_path = get_user_folder(user_email)
     shutil.rmtree(folder_path, ignore_errors=True)

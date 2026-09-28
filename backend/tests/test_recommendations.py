@@ -79,17 +79,17 @@ class PairingRuleTests(unittest.TestCase):
             else:
                 self.assertEqual(outfits, [], occasion)
 
-    def test_saree_comes_with_blouse(self):
+    def test_saree_is_a_complete_outfit_blouse_not_required(self):
         items = wardrobe(("Saree", "red"), ("Blouse", "gold"))
         outfits = recommend_outfits(items, "traditional", account_gender="Female")
         self.assertEqual(len(outfits), 1)
-        self.assertEqual(outfits[0]["type"], "set")
-        self.assertIn("Blouse", names(outfits[0]))
+        self.assertEqual(outfits[0]["type"], "one-piece")
+        self.assertNotIn("Blouse", names(outfits[0]))
 
-    def test_saree_without_blouse_gets_a_note(self):
+    def test_saree_without_blouse_needs_no_note(self):
         items = wardrobe(("Saree", "red"))
         outfit = recommend_outfits(items, "wedding", account_gender="Female")[0]
-        self.assertTrue(any("blouse" in line.lower() for line in outfit["why"]))
+        self.assertFalse(any("blouse" in line.lower() for line in outfit["why"]))
 
     def test_blouse_is_never_paired_with_western_bottoms(self):
         items = wardrobe(("Blouse", "white"), ("Denims", "blue"), ("Skirt", "black"))
@@ -314,10 +314,9 @@ class EthnicWesternSeparationTests(unittest.TestCase):
                     self.assertNotIn("Lehenga", names(outfit))
                     self.assertNotIn("Saree", names(outfit))
 
-    def test_sets_use_a_real_blouse(self):
+    def test_sets_never_pull_in_a_separate_blouse(self):
         for outfit in recommend_outfits(self.ITEMS, "wedding", account_gender="Female"):
-            if "Lehenga" in names(outfit) or "Saree" in names(outfit):
-                self.assertIn("Blouse", names(outfit))
+            self.assertNotIn("Blouse", names(outfit))
 
 
 if __name__ == "__main__":

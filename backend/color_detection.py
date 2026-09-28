@@ -557,6 +557,21 @@ def detect_colors(image_path):
     if not garment_pixels:
         garment_pixels = pixels
 
+    return _describe_garment_pixels(garment_pixels, backdrop_rgb)
+
+
+def detect_colors_from_pixels(garment_pixels):
+    """
+    Same reading as detect_colors(), for pixels already known to be the
+    garment (the background-removal mask in image_pipeline picks them).
+    No backdrop guessing is needed, so a white background can't leak in.
+    """
+    if not garment_pixels:
+        return None
+    return _describe_garment_pixels(list(garment_pixels), None)
+
+
+def _describe_garment_pixels(garment_pixels, backdrop_rgb):
     clusters = _kmeans(garment_pixels, 3)
 
     if not clusters:
@@ -610,7 +625,7 @@ def detect_colors(image_path):
     # shirt on white) may simply BE that colour - but we cannot tell
     # the garment from the background, so the reading is honest about
     # being less certain rather than silently confident.
-    hard_to_separate = (
+    hard_to_separate = backdrop_rgb is not None and (
         _squared_distance(primary_rgb, backdrop_rgb) < _SECONDARY_MIN_DISTANCE
     )
 

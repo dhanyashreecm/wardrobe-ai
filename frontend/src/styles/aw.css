@@ -261,13 +261,6 @@ button:hover:not(:disabled) { background: var(--aw-rose-dark); }
 .aw-filterbar label { display: block; font-size: 11.5px; color: var(--aw-muted); margin-bottom: 4px; }
 .aw-filterbar select, .aw-filterbar input { border: none; background: transparent; padding: 4px 0; margin: 0; font-size: 14px; width: 100%; outline: none; }
 .aw-filterbar .go { display: flex; align-items: center; padding: 0 8px; }
-.aw-inspo { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
-.aw-inspo a {
-  display: flex; align-items: center; gap: 12px; padding: 14px 16px; text-decoration: none; color: var(--aw-text);
-  background: linear-gradient(135deg, #fff, #f7ece6); border: 1px solid var(--aw-border); border-radius: 14px; font-size: 13.5px;
-}
-.aw-inspo a:hover { border-color: var(--aw-rose); }
-.aw-inspo .pin { width: 30px; height: 30px; border-radius: 50%; background: #e60023; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 15px; flex-shrink: 0; }
 
 /* ---------- trip ---------- */
 .aw-weather-hero {

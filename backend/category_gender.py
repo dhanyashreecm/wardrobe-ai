@@ -102,7 +102,7 @@ CATEGORY_GENDER_TOKENS = {
     "kurta": None,  # ambiguous alone - see _gender_from_tokens below
     "kurtas": None,
     "kurti": FEMALE, "kurtis": FEMALE,
-    "crop": FEMALE,
+    "crop": FEMALE, "sharara": FEMALE, "shararas": FEMALE, "gharara": FEMALE,
     "heel": FEMALE, "heels": FEMALE, "stiletto": FEMALE, "stilettos": FEMALE,
     "men": MALE,
     "women": FEMALE,
@@ -118,6 +118,15 @@ def category_gender(category):
     category defaults to "unisex" so an unexpected/new category type
     is never silently hidden from either gender's wardrobe.
     """
+
+    # The canonical catalogue decides first (backend/category_catalog.py).
+    # The token rules below only cover names the catalogue doesn't know.
+    from backend.category_catalog import genders_of
+    catalogue = genders_of(category)
+    if catalogue:
+        if len(catalogue) == 2:
+            return UNISEX
+        return MALE if catalogue == (MALE,) else FEMALE
 
     tokens = _tokens(category)
 
@@ -190,3 +199,17 @@ def is_allowed_for_account(category, account_gender):
         return False
 
     return True
+
+
+def item_allowed_for_account(item, account_gender):
+    """
+    HARD gender filter for a stored wardrobe item. An item saved with an
+    explicit "gender" (every upload since the catalogue change) must
+    match the account; otherwise its category decides.
+    """
+    if not account_gender:
+        return True
+    stored = (item.get("gender") or "").strip().lower()
+    if stored and stored != account_gender.strip().lower():
+        return False
+    return is_allowed_for_account(item.get("category"), account_gender)

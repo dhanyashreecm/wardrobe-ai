@@ -32,7 +32,7 @@ from datetime import datetime
 from backend import outfit_builder as ob
 from backend import outfit_assignment
 from backend import outfit_presentation as present
-from backend.category_gender import is_allowed_for_account
+from backend.category_gender import is_allowed_for_account, item_allowed_for_account
 from backend.color_theory import classify_color, color_harmony
 from backend.occasion_model import occasion_fit, MAX_OCCASION_POINTS
 
@@ -67,6 +67,9 @@ def footwear_suits(item, occasion):
         return kind == "footwear" and (sporty or words <= {"footwear", "shoe", "shoes"})
     if occasion in ETHNIC_OCCASIONS:
         return not sporty and kind != "boots"
+    # Mojaris/juttis are traditional footwear only.
+    if kind == "mojari":
+        return False
     if occasion in FORMAL_OCCASIONS:
         return not sporty and kind != "mojari" and not (words & {"flip", "slides"})
     if occasion == "party":
@@ -79,11 +82,18 @@ def footwear_suits(item, occasion):
 def accessory_suits(item, occasion):
     kind = ob.kind_for(item.get("category"))
     if occasion == "sports":
-        return kind == "watch"
-    if kind == "head":
-        return occasion in ("wedding", "traditional", "party")
-    if kind == "dupatta":
-        return occasion in ("wedding", "traditional", "party", "casual", "day_outing", "college", "office")
+        return kind in ("watch", "cap")
+    if kind == "tie":
+        return occasion in ("office", "interview", "date", "party")
+    if kind == "cap":
+        return occasion in ("casual", "day_outing", "college")
+    if kind == "sunglasses":
+        return occasion not in ETHNIC_OCCASIONS | FORMAL_OCCASIONS
+    if kind in ("head", "dupatta"):
+        return occasion in ETHNIC_OCCASIONS
+    # a clutch/potli is evening or festive, not for class or interviews
+    if kind == "bag" and ob._tokens(item.get("category")) & {"clutch", "clutches", "potli"}:
+        return occasion in ("party", "date", "wedding", "traditional")
     if kind == "belt":
         return occasion not in ETHNIC_OCCASIONS
     return True
@@ -95,7 +105,11 @@ def item_suits_occasion(item, occasion, effective_occasions):
         return footwear_suits(item, occasion)
     if role == ob.ACCESSORY:
         return accessory_suits(item, occasion)
-    if role == ob.HIDDEN:
+    if role in (ob.HIDDEN, ob.SET_PART):
+        return False  # petticoats; blouses belong to their saree/lehenga
+    # Traditional and western are separate modes.
+    mode = ob.garment_mode(ob.kind_for(item.get("category")))
+    if mode and mode != ob.occasion_mode(occasion):
         return False
     return occasion in effective_occasions(item.get("category"), item.get("occasion"))
 
@@ -216,7 +230,7 @@ def recommend_items(wardrobe_items, occasion, group, account_gender=None,
         if item_group != group or ob.role_for(item.get("category")) == ob.HIDDEN:
             continue
         in_group += 1
-        if not is_allowed_for_account(item.get("category"), account_gender):
+        if not item_allowed_for_account(item, account_gender):
             _log(f"EXCLUDE {name}: other gender")
             continue
         if not item_suits_occasion(item, occasion, effective_occasions):

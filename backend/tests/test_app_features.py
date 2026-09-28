@@ -51,12 +51,12 @@ class BriefScenarioTests(unittest.TestCase):
         for outfit in looks("interview"):
             self.assertTrue({"Shirt", "Trousers"} <= names(outfit))
 
-    def test_wedding_is_ethnic_with_blouse(self):
+    def test_wedding_is_a_complete_ethnic_outfit_without_blouse_matching(self):
         outfits = looks("wedding")
         self.assertTrue(outfits)
         for outfit in outfits:
             self.assertEqual(outfit["style"], "ethnic")
-            self.assertIn("Blouse", names(outfit))
+            self.assertNotIn("Blouse", names(outfit))
 
     def test_casual_is_crop_top_bootcut_sneakers(self):
         self.assertTrue(any(
@@ -165,11 +165,14 @@ class PresentationTests(unittest.TestCase):
         titles = [o["title"] for o in looks("date")]
         self.assertEqual(len(titles), len(set(titles)))
 
-    def test_inspiration_is_a_pinterest_link_not_a_dependency(self):
-        outfit = looks("party")[0]
-        self.assertTrue(outfit["inspiration"]["pinterest_url"].startswith(
-            "https://www.pinterest.com/search/pins/?q="))
-        self.assertTrue(present.occasion_inspiration("wedding", "Female"))
+    def test_no_pinterest_or_external_inspiration_in_results(self):
+        import json
+        for occasion in ("party", "wedding", "casual", "traditional"):
+            for outfit in looks(occasion):
+                self.assertNotIn("inspiration", outfit)
+                self.assertNotIn("pinterest", json.dumps(outfit, default=str).lower())
+        self.assertFalse(hasattr(present, "inspiration"))
+        self.assertFalse(hasattr(present, "occasion_inspiration"))
 
     def test_why_is_built_from_real_data(self):
         for line in looks("party")[0]["why"]:

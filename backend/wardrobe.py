@@ -4,7 +4,7 @@ from bson.objectid import ObjectId
 
 wardrobe_collection = db["wardrobe"]
 
-def add_item(user_email, category, color, image_path, occasion="", material=None, styling=None, attributes=None):
+def add_item(user_email, category, color, image_path, occasion="", material=None, styling=None, attributes=None, gender=None):
     # occasion is now an OPTIONAL manual override, not a required
     # field - "" (the default) means "fully automatic": which
     # occasions this item is eligible for gets worked out from its
@@ -21,6 +21,11 @@ def add_item(user_email, category, color, image_path, occasion="", material=None
         "favorite": False,
         "created_at": datetime.utcnow()
     }
+
+    # The account's gender when the item was saved (category_catalog
+    # checked the category belongs to it). Recommendations re-check it.
+    if gender:
+        item["gender"] = gender
 
     if material:
         item["material"] = material

@@ -1,0 +1,117 @@
+/* Virtual Try-On - built on the aw.css tokens so it matches the rest of AI Wardrobe. */
+
+.tryon-steps {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.9fr) minmax(300px, 1.4fr) minmax(240px, 0.9fr);
+  gap: 20px;
+  align-items: start;
+}
+@media (max-width: 1100px) { .tryon-steps { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 720px)  { .tryon-steps { grid-template-columns: 1fr; } }
+
+.tryon-step h3 { display: flex; align-items: center; gap: 10px; font-size: 21px; margin: 0 0 14px; }
+.tryon-num {
+  display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 50%;
+  background: var(--aw-rose-light); color: var(--aw-rose-dark); font-family: inherit; font-size: 13px; font-weight: 600;
+}
+
+/* photo */
+.tryon-drop {
+  width: 100%; min-height: 220px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; border: 1.5px dashed var(--aw-border); border-radius: var(--aw-radius); background: rgba(255,255,255,.6);
+  color: var(--aw-text); font-size: 15px; font-weight: 500; cursor: pointer; transition: border-color .2s, background .2s;
+}
+.tryon-drop:hover { border-color: var(--aw-rose); background: #fff; }
+.tryon-drop small { color: var(--aw-muted); font-weight: 400; font-size: 12px; }
+.tryon-drop-icon { font-size: 26px; color: var(--aw-rose); line-height: 1; }
+.tryon-photo img {
+  width: 100%; max-height: 380px; object-fit: contain; border-radius: 14px; background: var(--aw-bg-soft);
+  display: block; margin-bottom: 10px;
+}
+.tryon-tips { margin-top: 16px; font-size: 12.5px; color: var(--aw-muted); line-height: 1.55; }
+.tryon-tips p { margin: 0 0 4px; }
+.tryon-tips ul { margin: 0 0 8px; padding-left: 18px; }
+.aw-alert ul { margin: 6px 0 0; padding-left: 18px; }
+
+/* garment picker */
+.tryon-group { margin-bottom: 14px; }
+.tryon-group .aw-label { margin-bottom: 8px; display: block; }
+.tryon-items { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 10px; }
+.tryon-item {
+  display: flex; flex-direction: column; gap: 6px; padding: 6px; border: 1.5px solid var(--aw-border);
+  border-radius: 14px; background: var(--aw-card); cursor: pointer; text-align: left; transition: border-color .2s, transform .2s;
+}
+.tryon-item:hover { transform: translateY(-1px); border-color: var(--aw-rose-light); }
+.tryon-item.on { border-color: var(--aw-rose); box-shadow: 0 0 0 3px var(--aw-rose-light); }
+.tryon-item img { width: 100%; aspect-ratio: 4 / 5; object-fit: cover; border-radius: 10px; background: var(--aw-bg-soft); }
+.tryon-item span { font-size: 12px; color: var(--aw-text); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tryon-item:disabled { opacity: .6; cursor: not-allowed; }
+.tryon-empty { padding: 26px 16px; }
+
+.tryon-unavailable { margin-top: 10px; font-size: 13px; color: var(--aw-muted); }
+.tryon-unavailable summary { cursor: pointer; font-weight: 500; color: var(--aw-text); }
+.tryon-unavailable ul { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 10px; }
+.tryon-unavailable li { display: flex; gap: 10px; align-items: flex-start; }
+.tryon-unavailable img { width: 40px; height: 50px; object-fit: cover; border-radius: 8px; opacity: .7; flex: none; }
+.tryon-unavailable li div { display: flex; flex-direction: column; gap: 2px; line-height: 1.45; }
+.tryon-unavailable strong { color: var(--aw-text); font-weight: 500; }
+
+/* try on */
+.tryon-selected { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.tryon-chip {
+  display: flex; align-items: center; gap: 8px; padding: 4px 10px 4px 4px; border-radius: 999px;
+  background: var(--aw-card); border: 1px solid var(--aw-border); font-size: 12.5px;
+}
+.tryon-chip img { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; }
+.tryon-go { width: 100%; }
+.tryon-loading { margin-top: 18px; text-align: center; }
+.tryon-loading-title { font-family: var(--aw-serif); font-size: 18px; margin: 10px 0 4px; }
+.tryon-orbit {
+  width: 42px; height: 42px; margin: 0 auto; border-radius: 50%;
+  border: 2px solid var(--aw-rose-light); border-top-color: var(--aw-rose);
+  animation: aw-spin 1.1s linear infinite;
+}
+@keyframes aw-spin { to { transform: rotate(360deg); } }
+
+/* result */
+.tryon-result { margin-top: 24px; }
+.tryon-result-body { display: grid; grid-template-columns: minmax(260px, 420px) 1fr; gap: 26px; align-items: start; }
+@media (max-width: 720px) { .tryon-result-body { grid-template-columns: 1fr; } }
+.tryon-result figure { margin: 0; }
+.tryon-result figure img { width: 100%; border-radius: var(--aw-radius); display: block; box-shadow: var(--aw-shadow); background: var(--aw-bg-soft); }
+.tryon-result-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 6px 0 10px; }
+
+/* history */
+.tryon-history { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
+.tryon-history-card { overflow: hidden; }
+.tryon-history-card > button { display: block; width: 100%; padding: 0; border: 0; background: none; cursor: pointer; }
+.tryon-history-card img { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; display: block; }
+.tryon-history-meta { display: flex; justify-content: space-between; gap: 8px; padding: 8px 10px; font-size: 12px; color: var(--aw-muted); }
+.tryon-history-meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.tryon-unconfigured { max-width: 640px; }
+.tryon-unconfigured h3 { margin-top: 0; }
+.tryon-unconfigured p { color: var(--aw-muted); line-height: 1.6; }
+.tryon-unconfigured ul { margin: 6px 0; padding-left: 18px; }
+
+/* Provider status banner (ready / fallback / unavailable) */
+.tryon-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  margin: 0 0 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: #f6f7f9;
+  font-size: 14px;
+}
+.tryon-status p { margin: 0; }
+.tryon-status > div { flex: 1; }
+.tryon-status-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; background: #9aa1ab; }
+.tryon-status-ready .tryon-status-dot { background: #2e9d62; }
+.tryon-status-fallback { background: #fff8e8; border-color: #f0dca8; }
+.tryon-status-fallback .tryon-status-dot { background: #d99a1e; }
+.tryon-status-unavailable { background: #fdf0ef; border-color: #f1c9c5; }
+.tryon-status-unavailable .tryon-status-dot { background: #c9483b; }
+.tryon-retry { margin-left: 12px; }

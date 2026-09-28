@@ -1,0 +1,150 @@
+/* Home page - calm personal dashboard (Dashboard.js). Uses the tokens
+   from aw.css so it matches the rest of the app. */
+
+.hm {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+  gap: 22px;
+  max-width: 1320px;
+  margin: 0 auto;
+}
+
+
+.hm-avatar {
+  width: 56px; height: 56px; border-radius: 50%; object-fit: cover; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--aw-rose-light); color: var(--aw-rose-dark);
+  font-family: var(--aw-serif); font-size: 22px;
+}
+.hm-avatar.sm { width: 34px; height: 34px; font-size: 15px; }
+
+.hm-muted { color: var(--aw-muted); font-size: 13px; }
+.hm-script { font-family: "Caveat", cursive; color: var(--aw-muted); font-size: 19px; }
+.hm-arrow { margin-left: auto; color: var(--aw-muted); }
+.hm-leaf { color: var(--aw-sage); font-size: 0.55em; vertical-align: middle; }
+
+/* ---- hero ---- */
+.hm-hero {
+  position: relative; overflow: hidden;
+  display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  min-height: 330px; border-radius: 24px;
+  background: linear-gradient(90deg, #f7efe8 0%, #f5ece4 100%);
+  border: 1px solid var(--aw-border);
+}
+.hm-hero-text { padding: 40px 20px 38px 52px; align-self: center; }
+.hm-eyebrow {
+  text-transform: uppercase; letter-spacing: 0.22em; font-size: 13px;
+  color: var(--aw-rose); font-weight: 500;
+}
+.hm-name {
+  font-family: var(--aw-serif); font-weight: 500;
+  font-size: clamp(44px, 5.2vw, 68px); line-height: 1.05; margin: 10px 0 18px;
+  color: var(--aw-text); word-break: break-word;
+}
+.hm-lede { color: #5a4d47; font-size: 16.5px; line-height: 1.6; margin: 0 0 28px; }
+.hm-cta {
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 13px 24px; border-radius: 999px; text-decoration: none;
+  background: #efd3cc; color: #4a2f2a; font-weight: 500; font-size: 14.5px;
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+.hm-cta:hover { background: #e8c5bc; transform: translateY(-1px); }
+.hm-hero-img {
+  background: url("../assets/home-hero.jpg") center right / cover no-repeat;
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, #000 22%);
+  mask-image: linear-gradient(90deg, transparent 0%, #000 22%);
+}
+
+/* ---- profile summary ---- */
+.hm-profile, .hm-added {
+  background: #eef0e8; border: 1px solid #e2e5d9; border-radius: 22px; padding: 24px 22px;
+  display: flex; flex-direction: column;
+}
+.hm-profile-head { display: flex; align-items: center; gap: 14px; padding-bottom: 16px; }
+.hm-profile-head > div { min-width: 0; }
+.hm-profile-head .hm-muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+.hm-profile-name { font-family: var(--aw-serif); font-size: 22px; }
+.hm-row {
+  display: flex; align-items: center; gap: 14px; padding: 15px 2px;
+  border-top: 1px solid #dfe2d6; color: var(--aw-text); text-decoration: none;
+}
+.hm-row > span:nth-child(2) { display: flex; flex-direction: column; gap: 2px; }
+.hm-row-title { font-size: 14px; }
+.hm-row-ico { width: 20px; text-align: center; color: var(--aw-text); }
+.hm-profile .hm-script { margin-top: auto; padding-top: 14px; }
+
+/* ---- recent outfits ---- */
+.hm-recent {
+  background: var(--aw-card); border: 1px solid var(--aw-border); border-radius: 22px;
+  padding: 22px 26px 20px; min-width: 0;
+}
+.hm-recent h2, .hm-added h2 { font-family: var(--aw-serif); font-size: 26px; margin: 0 0 4px; }
+.hm-recent-row {
+  display: grid; grid-template-columns: repeat(6, minmax(96px, 1fr));
+  gap: 14px; margin-top: 16px; overflow-x: auto; padding-bottom: 4px;
+}
+.hm-outfit { margin: 0; }
+.hm-outfit img {
+  width: 100%; aspect-ratio: 4 / 5; object-fit: cover; border-radius: 12px;
+  background: var(--aw-bg-soft); display: block;
+}
+.hm-outfit figcaption { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; font-size: 13px; }
+.hm-outfit figcaption strong { font-weight: 500; font-size: 14px; }
+.hm-outfit figcaption span { color: var(--aw-muted); }
+.hm-empty {
+  margin-top: 18px; padding: 26px; border: 1px dashed var(--aw-border); border-radius: 16px;
+  text-align: center; color: #5a4d47;
+}
+.hm-empty p { margin: 0 0 10px; }
+.hm-link { color: var(--aw-rose); text-decoration: none; font-weight: 500; }
+.hm-note { color: var(--aw-rose-dark); font-size: 14px; }
+
+/* ---- quote ---- */
+.hm-quote {
+  grid-column: 1 / -1; display: flex; align-items: center; gap: 18px;
+  background: #e9ebe2; border-radius: 20px; padding: 16px 30px;
+}
+.hm-quote .hm-leaf { font-size: 26px; }
+.hm-quote > div { display: flex; flex-direction: column; gap: 2px; }
+.hm-quote strong { font-family: var(--aw-serif); font-weight: 500; font-size: 20px; }
+.hm-quote-side { margin-left: auto; text-align: right; }
+
+/* ---- smaller screens ---- */
+@media (max-width: 1100px) {
+  .hm { grid-template-columns: minmax(0, 1fr); }
+  .hm-quote-side { display: none; }
+}
+@media (max-width: 760px) {
+  .hm-hero { grid-template-columns: minmax(0, 1fr); min-height: 0; }
+  .hm-hero-img { height: 220px; order: -1; -webkit-mask-image: none; mask-image: none; }
+  .hm-hero-text { padding: 28px 24px 30px; }
+  .hm-recent { padding: 20px; }
+  .hm-quote { padding: 18px 20px; }
+}
+
+/* ---- profile stats ---- */
+.hm-stats { margin: 0; }
+.hm-stats > div {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+  padding: 13px 2px; border-top: 1px solid #dfe2d6;
+}
+.hm-stats dt { font-size: 13px; color: var(--aw-muted); }
+.hm-stats dd { margin: 0; font-size: 15px; color: var(--aw-text); }
+
+/* ---- recently added ---- */
+.hm-added { background: #f6ebe6; border-color: #eeddd5; }
+.hm-added-list { list-style: none; margin: 14px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.hm-added-list li {
+  display: flex; align-items: center; gap: 12px; padding: 8px;
+  background: #fffcfa; border-radius: 14px;
+}
+.hm-added-list img {
+  width: 44px; height: 54px; object-fit: cover; border-radius: 10px; background: var(--aw-bg-soft); flex-shrink: 0;
+}
+.hm-added-list li > span { display: flex; flex-direction: column; min-width: 0; }
+.hm-added-list strong { font-weight: 500; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hm-empty-title { font-family: var(--aw-serif); font-size: 20px; color: var(--aw-text); margin-bottom: 6px !important; }
+
+@media (max-width: 760px) {
+  .hm-recent-row { grid-template-columns: repeat(3, minmax(0, 1fr)); overflow-x: visible; }
+}

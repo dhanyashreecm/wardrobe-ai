@@ -2,7 +2,8 @@
 Glue between the recommendation engine and the API routes:
 
   * finalize()      - Colour/Style filters, FINAL VALIDATION, titles,
-                      style tags and inspiration for every outfit
+                      style tags for every outfit (no external links:
+                      every look comes only from the user's wardrobe)
   * build_home()    - the Home page, built only from the user's data
   * trip_looks()    - named looks for a trip (Sightseeing, Evening
                       Dinner...) using the destination's weather
@@ -45,7 +46,6 @@ def finalize(recommendations, wardrobe_items, account_gender, occasion,
         used_titles.add(outfit["title"])
         outfit["style_tags"] = present.style_tags(outfit)
         outfit["colours"] = [item.get("color") for item in outfit["items"] if item.get("color")]
-        outfit["inspiration"] = present.inspiration(outfit, account_gender)
         outfit["why"] = list(outfit.get("why", [])) + ["Uses only pieces from your wardrobe."]
         kept.append(outfit)
 

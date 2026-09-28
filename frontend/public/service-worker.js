@@ -5,7 +5,7 @@
  * opens instantly. It NEVER caches /api/ calls, so wardrobe data,
  * logins and recommendations always come live from the backend.
  */
-const CACHE = "wardrobeai-v1";
+const CACHE = "wardrobeai-v3"; // bump on releases: old app files are dropped
 const SHELL = ["/", "/index.html", "/manifest.json", "/logo192.png", "/logo512.png"];
 
 self.addEventListener("install", (event) => {

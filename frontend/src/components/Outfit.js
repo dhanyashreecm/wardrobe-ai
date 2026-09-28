@@ -141,19 +141,6 @@ export function OutfitDrawer({ outfit, onClose, actions }) {
           {(outfit.why || []).map((line, i) => <li key={i}>{line}</li>)}
         </ul>
 
-        {outfit.inspiration && (
-          <div className="aw-inspo" style={{ marginBottom: 18 }}>
-            <a href={outfit.inspiration.pinterest_url} target="_blank" rel="noreferrer">
-              <span className="pin">P</span>
-              <span>
-                See similar looks on Pinterest
-                <br />
-                <small style={{ color: "#8c7b72" }}>{outfit.inspiration.query}</small>
-              </span>
-            </a>
-          </div>
-        )}
-
         <button type="button" className="aw-btn" style={{ width: "100%" }} onClick={() => act(outfit, "like")}>
           {feedback === "like" ? "♥ Saved to your looks" : "♡ Save to Wardrobe"}
         </button>
@@ -161,9 +148,18 @@ export function OutfitDrawer({ outfit, onClose, actions }) {
           type="button"
           className="aw-btn aw-btn-ghost"
           style={{ width: "100%", marginTop: 10 }}
-          onClick={() => navigate("/tryon", { state: { outfit } })}
+          onClick={() => navigate("/tryon", {
+            state: {
+              outfit,
+              // the exact pieces of this look, for the try-on page
+              itemIds: outfit.items.map((item) => item._id),
+              source: "recommendation",
+              occasion: outfit.occasion,
+              label: outfit.title,
+            },
+          })}
         >
-          Try Virtual Try-On
+          Try This On
         </button>
         <div className="aw-actions-row" style={{ justifyContent: "center" }}>
           <button type="button" className="aw-btn aw-btn-soft aw-btn-sm" disabled={s.worn} onClick={() => act(outfit, "wear")}>

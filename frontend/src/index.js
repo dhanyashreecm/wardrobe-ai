@@ -23,8 +23,15 @@ reportWebVitals();
 // worker would serve stale code while you're editing.
 if ("serviceWorker" in navigator && process.env.NODE_ENV === "production") {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/service-worker.js").catch((err) => {
-      console.warn("Service worker registration failed:", err);
+    navigator.serviceWorker.register("/service-worker.js")
+      .then((reg) => reg.update())
+      .catch((err) => {
+        console.warn("Service worker registration failed:", err);
+      });
+    // A newer build took over: reload once so no old screen stays open.
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (!reloaded) { reloaded = true; window.location.reload(); }
     });
   });
 }

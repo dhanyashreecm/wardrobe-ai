@@ -10,9 +10,23 @@ import { API_URL, assetUrl } from "../config";
 import {
   authGet, apiErrorMessage, isAuthError, itemMeta, swatch, OCCASIONS, occasionLabel,
 } from "../lib/api";
-import {
-  categoriesFor, MATERIAL_CATEGORIES, STYLING_CATEGORIES, WARDROBE_GROUPS,
-} from "../lib/categories";
+import { useCategories, hasFlag, groupsFor } from "../lib/categories";
+
+// Category <select> built from the account's own (gender-specific)
+// catalogue, grouped Tops / Bottoms / Traditional / Footwear...
+function CategoryOptions({ sections, current }) {
+  const known = sections.some((s) => s.categories.some((c) => c.value === current));
+  return (
+    <>
+      {sections.map((section) => (
+        <optgroup key={section.name} label={section.name}>
+          {section.categories.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+        </optgroup>
+      ))}
+      {current && !known && <option value={current}>{current} (older category)</option>}
+    </>
+  );
+}
 
 /*
  * MY WARDROBE
@@ -48,7 +62,7 @@ async function cropToFile(src, area, name) {
   return new File([blob], `${base}.jpg`, { type: "image/jpeg" });
 }
 
-function AddItemModal({ onClose, onSaved, gender, autoCategory }) {
+function AddItemModal({ onClose, onSaved, sections, autoCategory, categoryError }) {
   const [step, setStep] = useState("photo"); // photo | crop | details
   const [original, setOriginal] = useState(null);
   const [src, setSrc] = useState(null);
@@ -64,7 +78,7 @@ function AddItemModal({ onClose, onSaved, gender, autoCategory }) {
   const [status, setStatus] = useState("idle"); // idle | saving | saved
   const [error, setError] = useState("");
   const busy = useRef(false);
-  const categories = categoriesFor(gender);
+  const [choices, setChoices] = useState([]);
 
   const pickFile = (e) => {
     const chosen = e.target.files && e.target.files[0];
@@ -125,6 +139,14 @@ function AddItemModal({ onClose, onSaved, gender, autoCategory }) {
     } catch (err) {
       busy.current = false;
       setStatus("idle");
+      const body = err?.response?.data;
+      if (err?.response?.status === 422 && body?.options?.length) {
+        // The AI can only narrow it down: the user picks the exact type.
+        setChoices(body.options);
+        setCategory(body.guess || "");
+        setError(`${body.message} Then press "Add to wardrobe" again.`);
+        return;
+      }
       setError(apiErrorMessage(err, "Upload"));
       if (isAuthError(err)) setTimeout(() => onSaved(null, "auth"), 1800);
     }
@@ -177,8 +199,20 @@ function AddItemModal({ onClose, onSaved, gender, autoCategory }) {
                 {autoCategory
                   ? <option value="">✨ Let AI recognise it</option>
                   : <option value="">Choose a category…</option>}
-                {categories.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                <CategoryOptions sections={sections} />
               </select>
+              {!sections.length && (
+                <p className="aw-hint" role="status">{categoryError || "Loading your wardrobe categories…"}</p>
+              )}
+              {choices.length > 0 && (
+                <div className="aw-chips" role="group" aria-label="Choose the exact type">
+                  {choices.map((c) => (
+                    <button type="button" key={c.value}
+                      className={`aw-chip ${category === c.value ? "on" : ""}`}
+                      onClick={() => setCategory(c.value)} disabled={saving}>{c.label}</button>
+                  ))}
+                </div>
+              )}
               {!autoCategory && (
                 <p className="aw-hint">Automatic recognition isn't set up on this computer yet, so please pick the category.</p>
               )}
@@ -186,14 +220,14 @@ function AddItemModal({ onClose, onSaved, gender, autoCategory }) {
               <input className="aw-input" placeholder="e.g. black, navy, dusty pink" value={color}
                 onChange={(e) => setColor(e.target.value)} disabled={saving} />
               <p className="aw-hint">Leave blank and it's read from the photo.</p>
-              {MATERIAL_CATEGORIES.includes(category) && (
+              {hasFlag(sections, category, "material") && (
                 <>
                   <label className="aw-label">Material (optional)</label>
                   <input className="aw-input" placeholder="e.g. leather, gold, wool" value={material}
                     onChange={(e) => setMaterial(e.target.value)} disabled={saving} />
                 </>
               )}
-              {STYLING_CATEGORIES.includes(category) && (
+              {hasFlag(sections, category, "styling") && (
                 <>
                   <label className="aw-label">Styling (optional)</label>
                   <select className="aw-select" value={styling} onChange={(e) => setStyling(e.target.value)} disabled={saving}>
@@ -211,7 +245,7 @@ function AddItemModal({ onClose, onSaved, gender, autoCategory }) {
         {status === "saving" && (
           <div className="aw-progress">
             <span className="aw-spinner" />
-            {category ? "Uploading…" : "Uploading & recognising your item…"}
+            {category ? "Cleaning background & uploading…" : "Cleaning background & recognising your item…"}
           </div>
         )}
         {status === "saved" && <div className="aw-success">✓ Added to your wardrobe</div>}
@@ -238,7 +272,7 @@ function AddItemModal({ onClose, onSaved, gender, autoCategory }) {
   );
 }
 
-function EditItemModal({ item, gender, onClose, onSaved }) {
+function EditItemModal({ item, sections, onClose, onSaved }) {
   const [category, setCategory] = useState(item.category || "");
   const [color, setColor] = useState(item.color || "");
   const [material, setMaterial] = useState(item.material || "");
@@ -270,18 +304,17 @@ function EditItemModal({ item, gender, onClose, onSaved }) {
           <div className="aw-details-fields">
             <label className="aw-label">Category</label>
             <select className="aw-select" value={category} onChange={(e) => setCategory(e.target.value)}>
-              {categoriesFor(gender).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-              {!categoriesFor(gender).some(([v]) => v === category) && <option value={category}>{category}</option>}
+              <CategoryOptions sections={sections} current={category} />
             </select>
             <label className="aw-label">Colour</label>
             <input className="aw-input" value={color} onChange={(e) => setColor(e.target.value)} />
-            {MATERIAL_CATEGORIES.includes(category) && (
+            {hasFlag(sections, category, "material") && (
               <>
                 <label className="aw-label">Material</label>
                 <input className="aw-input" value={material} onChange={(e) => setMaterial(e.target.value)} />
               </>
             )}
-            {STYLING_CATEGORIES.includes(category) && (
+            {hasFlag(sections, category, "styling") && (
               <>
                 <label className="aw-label">Styling</label>
                 <select className="aw-select" value={styling} onChange={(e) => setStyling(e.target.value)}>
@@ -310,7 +343,8 @@ function EditItemModal({ item, gender, onClose, onSaved }) {
 
 function Wardrobe() {
   const navigate = useNavigate();
-  const gender = (localStorage.getItem("gender") || "").toLowerCase();
+  // Gender and categories come from the account on the server.
+  const { sections, gender, error: categoryError } = useCategories();
   const [items, setItems] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState("");
@@ -367,7 +401,12 @@ function Wardrobe() {
     if (data?.needs_confirmation && data.suggested_category) {
       setSuggestion({ itemId: data.item_id, saved: data.category, suggested: data.suggested_category });
     }
-    flash(`Added to your wardrobe as ${data?.category || "a new item"}${data?.color ? ` (${data.color})` : ""}.`);
+    // Only a colour the user chose is shown - never an auto-detected one.
+    const chosenColour = data?.color && !data?.color_auto_detected ? ` (${data.color})` : "";
+    const photoNote = data?.background_removed === false
+      ? ` ${(data.image_warnings || [])[0] || "Kept your photo as it was."}`
+      : data?.background_removed ? " Background removed." : "";
+    flash(`Added to your wardrobe as ${data?.category || "a new item"}${chosenColour}.${photoNote}`);
   };
 
   const toggleFavourite = async (item) => {
@@ -401,6 +440,12 @@ function Wardrobe() {
     }
     setSuggestion(null);
   };
+
+  // Straight to Virtual Try-On with this garment already selected.
+  const tryOn = (item) => {
+    navigate("/tryon", { state: { itemIds: [item._id], source: "wardrobe", label: item.display_name || item.category } });
+  };
+  const canTryOn = (item) => !["Shoes", "Accessories"].includes(item.group);
 
   const styleMe = (item) => {
     navigate("/recommend", { state: { occasion: (item.suitable_occasions || [])[0] || "casual", category: item.group } });
@@ -460,7 +505,7 @@ function Wardrobe() {
         </label>
         <select className="aw-select" value={group} onChange={(e) => setGroup(e.target.value)} aria-label="Category">
           <option value="">All categories</option>
-          {WARDROBE_GROUPS.map((g) => <option key={g} value={g}>{g}</option>)}
+          {groupsFor(gender).map((g) => <option key={g} value={g}>{g}</option>)}
         </select>
         <select className="aw-select" value={colour} onChange={(e) => setColour(e.target.value)} aria-label="Colour">
           <option value="">All colours</option>
@@ -522,6 +567,9 @@ function Wardrobe() {
                 </button>
                 <button type="button" className="aw-icon-btn" onClick={() => setEditing(item)} title="Edit">Edit</button>
                 <button type="button" className="aw-icon-btn" onClick={() => styleMe(item)} title="Style me">Style me</button>
+                {canTryOn(item) && (
+                  <button type="button" className="aw-icon-btn" onClick={() => tryOn(item)} title="Try it on">Try on</button>
+                )}
                 <button type="button" className="aw-icon-btn danger" onClick={() => remove(item)} title="Delete">Delete</button>
               </div>
             </div>
@@ -548,6 +596,9 @@ function Wardrobe() {
                 </ul>
                 <div className="aw-actions-row">
                   <button className="aw-btn aw-btn-sm" onClick={() => styleMe(detail)}>✨ Style me</button>
+                  {canTryOn(detail) && (
+                    <button className="aw-btn aw-btn-ghost aw-btn-sm" onClick={() => tryOn(detail)}>Try it on</button>
+                  )}
                   <button className="aw-btn aw-btn-soft aw-btn-sm" onClick={() => { setEditing(detail); setDetail(null); }}>Edit</button>
                   <button className="aw-btn aw-btn-soft aw-btn-sm" onClick={() => remove(detail)}>Delete</button>
                 </div>
@@ -557,11 +608,13 @@ function Wardrobe() {
         </div>
       )}
 
+      {categoryError && <div className="aw-note" role="status">{categoryError}</div>}
+
       {showAdd && (
-        <AddItemModal gender={gender} autoCategory={autoCategory} onClose={() => setShowAdd(false)} onSaved={onSaved} />
+        <AddItemModal sections={sections} categoryError={categoryError} autoCategory={autoCategory} onClose={() => setShowAdd(false)} onSaved={onSaved} />
       )}
       {editing && (
-        <EditItemModal item={editing} gender={gender} onClose={() => setEditing(null)}
+        <EditItemModal item={editing} sections={sections} onClose={() => setEditing(null)}
           onSaved={() => { setEditing(null); fetchItems(); flash("Changes saved."); }} />
       )}
     </Layout>

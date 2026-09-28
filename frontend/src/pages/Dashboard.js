@@ -1,208 +1,221 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import Layout from "../components/Layout";
-import { OutfitCard, OutfitDrawer, useOutfitActions } from "../components/Outfit";
-import { PlaneIcon, TryOnIcon, SearchIcon, SparkleIcon } from "../components/Icons";
+import { useProfile } from "../components/PageHeader";
+import { SparkleIcon } from "../components/Icons";
 import { assetUrl } from "../config";
-import { authGet, swatch } from "../lib/api";
+import { authGet, isAuthError, occasionLabel } from "../lib/api";
+import "../styles/home.css";
 
-export function StyleEditStrip({ edits, onOpenEdit }) {
-  return (
-    <div className="aw-panel aw-edit-strip">
-      <div className="aw-edit-intro">
-        <div className="spark">✧</div>
-        <h2>Your Style Edit</h2>
-        <p className="aw-section-sub" style={{ margin: 0 }}>Curated from your wardrobe</p>
-      </div>
-      {edits.map((edit) => {
-        const pieces = (edit.outfits[0]?.items || []).slice(0, 3);
-        return (
-          <button
-            type="button"
-            key={edit.key}
-            className="aw-card aw-edit-card"
-            onClick={() => onOpenEdit(edit)}
-          >
-            <div className={`aw-edit-img ${pieces.length === 1 ? "single" : ""}`}>
-              {pieces.map((item) => (
-                <img key={item._id} src={assetUrl(item.image_path)} alt={item.display_name} />
-              ))}
-            </div>
-            <div className="aw-edit-body">
-              <strong>{edit.icon} {edit.title}</strong>
-              <span>
-                {edit.count
-                  ? `${edit.subtitle} · ${edit.count} look${edit.count === 1 ? "" : "s"}`
-                  : "Add a few more pieces to unlock this edit"}
-              </span>
-              <span className="arrow">→</span>
-            </div>
-          </button>
-        );
-      })}
-    </div>
-  );
+// HOME - a calm personal wardrobe dashboard. Everything shown comes from
+// the signed-in cloud account: the profile (/api/user/profile), the
+// wardrobe (/api/wardrobe) and the outfits actually marked "I wore this"
+// (/api/outfits/history). Nothing is invented; missing data is simply not
+// shown. Navigation lives in the sidebar only - Home does not repeat it.
+
+const MAX_RECENT = 6;
+const MAX_ADDED = 4;
+const NOT_MAIN = new Set(["Shoes", "Accessories"]);
+const WEEK_MS = 7 * 86400000;
+
+function greeting(now = new Date()) {
+  const hour = now.getHours();
+  if (hour < 12) return "Good morning";
+  if (hour < 17) return "Good afternoon";
+  return "Good evening";
 }
 
-export function ItemStrip({ items }) {
-  return (
-    <div className="aw-strip">
-      {items.map((item) => (
-        <Link to="/wardrobe" key={item._id} className="aw-card aw-item" style={{ textDecoration: "none", color: "inherit" }}>
-          <img className="aw-item-img" src={assetUrl(item.image_path)} alt={item.display_name} />
-          <div className="aw-item-body">
-            <div className="aw-item-name">{item.display_name}</div>
-            <div className="aw-item-meta">{item.group}</div>
-            <div className="aw-dots"><span className="aw-dot" style={{ background: swatch(item.color) }} /></div>
-          </div>
-        </Link>
-      ))}
-    </div>
-  );
+// The name saved on the account (first word). If the account has no
+// name, the server's email for it; otherwise a neutral "there".
+export function displayName(profile) {
+  const name = (profile?.name || "").trim();
+  if (name) return name.split(/\s+/)[0];
+  const email = (profile?.email || "").trim();
+  if (email.includes("@")) return email.split("@")[0];
+  return "there";
+}
+
+function dayLabel(iso) {
+  const when = new Date(iso);
+  if (Number.isNaN(when.getTime())) return "";
+  const today = new Date();
+  const days = Math.floor((today.setHours(0, 0, 0, 0) - new Date(when).setHours(0, 0, 0, 0)) / 86400000);
+  if (days === 0) return "Today";
+  if (days === 1) return "Yesterday";
+  return when.toLocaleDateString(undefined, { weekday: "long" });
+}
+
+// One picture per worn outfit: its main garment (not the shoes or bag).
+export function recentOutfits(history, items) {
+  const byId = new Map(items.map((item) => [String(item._id), item]));
+  const out = [];
+  for (const entry of history || []) {
+    const pieces = (entry.item_ids || []).map((id) => byId.get(String(id))).filter(Boolean);
+    if (!pieces.length) continue; // every piece since deleted
+    const cover = pieces.find((p) => !NOT_MAIN.has(p.group)) || pieces[0];
+    out.push({ key: `${entry.outfit_key}-${entry.worn_at}`, cover, entry });
+    if (out.length === MAX_RECENT) break;
+  }
+  return out;
+}
+
+function addedAt(item) {
+  const t = Date.parse(item.created_at || "");
+  return Number.isNaN(t) ? null : t;
+}
+
+// Newest pieces first (only items that carry a real upload date).
+export function recentlyAdded(items, limit = MAX_ADDED) {
+  return (items || [])
+    .filter((item) => addedAt(item) !== null)
+    .sort((a, b) => addedAt(b) - addedAt(a))
+    .slice(0, limit);
 }
 
 function Dashboard() {
   const navigate = useNavigate();
-  const [home, setHome] = useState(null);
+  const profile = useProfile();
+  const [items, setItems] = useState(null);
+  const [history, setHistory] = useState(null);
   const [error, setError] = useState("");
-  const [open, setOpen] = useState(null);
-  const actions = useOutfitActions();
 
   useEffect(() => {
     if (!localStorage.getItem("token")) {
       navigate("/login");
       return;
     }
-    authGet("/api/home")
-      .then(setHome)
-      .catch((err) => {
-        if (err.response?.status === 401 || err.response?.status === 422) {
-          localStorage.removeItem("token");
-          navigate("/login");
-        } else {
-          setError("Couldn't load your wardrobe - is the backend running?");
-        }
-      });
+    const onError = (err) => {
+      if (isAuthError(err)) {
+        localStorage.removeItem("token");
+        navigate("/login");
+      } else {
+        setError("Couldn't reach the server - is the backend running?");
+      }
+    };
+    authGet("/api/wardrobe").then((d) => setItems(d.items || [])).catch(onError);
+    authGet("/api/outfits/history")
+      .then((d) => setHistory(d.history || []))
+      .catch(() => setHistory([]));
   }, [navigate]);
 
-  const heroImages = (home?.recent || []).slice(0, 3);
-  const firstName = (home?.name || "").split(" ")[0];
+  // Blank until the profile arrives, so no placeholder name flashes.
+  const name = profile ? displayName(profile) : "";
+  const gender = (profile?.gender || "").toLowerCase();
+  const recent = useMemo(
+    () => (items && history ? recentOutfits(history, items) : []),
+    [items, history]
+  );
+  const added = useMemo(() => recentlyAdded(items), [items]);
+  const addedThisWeek = (items || []).filter((i) => (addedAt(i) || 0) > Date.now() - WEEK_MS).length;
+  const loading = items === null || history === null;
+  const initial = (name || "·").charAt(0).toUpperCase();
 
   return (
     <Layout>
-      <div className="aw-hero">
-        <div className="aw-hero-text">
-          <div className="script">Welcome to your{firstName ? `, ${firstName}` : ""}</div>
-          <h1>AI Wardrobe</h1>
-          <p style={{ fontSize: 17, color: "#3f3531", marginBottom: 14 }}>
-            Your clothes. Your style. Your possibilities.
-          </p>
-          <p>
-            Get personalised outfit recommendations, plan your looks for any
-            occasion, explore travel-ready outfits and so much more — all from
-            your own wardrobe.
-          </p>
-          <div style={{ marginTop: 24 }}>
-            <Link to="/wardrobe" className="aw-btn">Explore Your Wardrobe →</Link>
-          </div>
-        </div>
-        <div className="aw-hero-art">
-          {heroImages.length >= 1 ? (
-            <>
-              {heroImages.map((item) => (
-                <img key={item._id} src={assetUrl(item.image_path)} alt={item.display_name} />
-              ))}
-              <span className="aw-hero-script">Better outfits, brighter days ♡</span>
-            </>
-          ) : (
-            <div className="aw-hero-placeholder">Your wardrobe starts here ✦</div>
-          )}
-        </div>
-      </div>
-
-      {error && <p className="aw-note" style={{ marginTop: 20 }}>{error}</p>}
-
-      {home && (
-        <>
-          <div style={{ marginTop: 28 }}>
-            <StyleEditStrip
-              edits={home.edits}
-              onOpenEdit={(edit) =>
-                edit.outfits[0] ? setOpen(edit.outfits[0]) : navigate("/wardrobe")
-              }
-            />
-          </div>
-
-          <div className="aw-shortcuts" style={{ marginTop: 22 }}>
-            <Link to="/recommend" className="aw-card aw-shortcut">
-              <span className="ico"><SparkleIcon width={22} /></span>
-              <div><strong>Style me</strong><span>Outfits for any occasion</span></div>
+      <div className="hm">
+        <section className="hm-hero">
+          <div className="hm-hero-text">
+            <div className="hm-eyebrow">{greeting()},</div>
+            <h1 className="hm-name">{name} <span className="hm-leaf" aria-hidden="true">❦</span></h1>
+            <p className="hm-lede">
+              Welcome back to your wardrobe.
+              <br />
+              Let's create something beautiful today.
+            </p>
+            <Link to="/recommend" className="hm-cta">
+              <SparkleIcon width={17} height={17} /> Get Outfit Recommendations <span aria-hidden="true">→</span>
             </Link>
-            <Link to="/trip" className="aw-card aw-shortcut">
-              <span className="ico"><PlaneIcon width={22} /></span>
+          </div>
+          <div className="hm-hero-img" role="img" aria-label="A calm wardrobe corner with a clothing rack" />
+        </section>
+
+        <aside className="hm-profile" aria-label="Your profile">
+          <div className="hm-profile-head">
+            {profile?.profile_picture ? (
+              <img className="hm-avatar" src={assetUrl(profile.profile_picture)} alt="" />
+            ) : (
+              <span className="hm-avatar">{initial}</span>
+            )}
+            <div>
+              <div className="hm-profile-name">{profile?.name || name}</div>
+              {profile?.email && <div className="hm-muted">{profile.email}</div>}
+            </div>
+          </div>
+          <dl className="hm-stats">
+            <div>
+              <dt>Wardrobe</dt>
+              <dd>{items === null ? "…" : `${items.length} item${items.length === 1 ? "" : "s"}`}</dd>
+            </div>
+            {gender && (
               <div>
-                <strong>Trip Planner</strong>
-                <span>
-                  {home.weather
-                    ? `${home.city}: ${Math.round(home.weather.temp_c)}°C, ${home.weather.description || home.weather.condition}`
-                    : "Weather-ready packing"}
-                </span>
+                <dt>Wardrobe for</dt>
+                <dd>{gender === "male" ? "Men" : gender === "female" ? "Women" : gender}</dd>
               </div>
-            </Link>
-            <Link to="/tryon" className="aw-card aw-shortcut">
-              <span className="ico"><TryOnIcon width={22} /></span>
-              <div><strong>Virtual Try-On</strong><span>See a look put together</span></div>
-            </Link>
-            <Link to="/similar" className="aw-card aw-shortcut">
-              <span className="ico"><SearchIcon width={22} /></span>
-              <div><strong>Find Similar</strong><span>Match any clothing photo</span></div>
-            </Link>
-          </div>
-
-          {home.top_pick && (
-            <>
-              <h2 className="aw-section-title">Recommended for you</h2>
-              <p className="aw-section-sub">One look from each of your edits</p>
-              <div className="aw-outfit-grid">
-                {home.edits.filter((e) => e.outfits[0]).map((edit) => (
-                  <OutfitCard
-                    key={edit.key}
-                    outfit={edit.outfits[0]}
-                    badge={`${edit.icon} ${edit.title}`}
-                    onOpen={setOpen}
-                    actions={actions}
-                  />
-                ))}
+            )}
+            {items !== null && (
+              <div>
+                <dt>Added this week</dt>
+                <dd>{addedThisWeek}</dd>
               </div>
-            </>
-          )}
+            )}
+          </dl>
+          <div className="hm-script">Better outfits, brighter days ♡</div>
+        </aside>
 
-          <div className="aw-row-head">
-            <h2 className="aw-section-title">Recently added</h2>
-            <Link to="/wardrobe" className="aw-link">View all {home.item_count} items →</Link>
-          </div>
-          {home.recent.length ? (
-            <ItemStrip items={home.recent} />
-          ) : (
-            <div className="aw-empty">
-              <h3>Your wardrobe is empty</h3>
-              <p>Add your first piece and the AI will recognise it for you.</p>
-              <Link to="/wardrobe" className="aw-btn" style={{ marginTop: 14 }}>+ Add clothes</Link>
+        <section className="hm-recent" aria-label="Your wardrobe this week">
+          <h2>Your wardrobe this week</h2>
+          <p className="hm-muted">Outfits you've marked as worn.</p>
+          {error && <p className="hm-note">{error}</p>}
+          {!error && loading && <p className="hm-muted">Loading…</p>}
+          {!error && !loading && recent.length === 0 && (
+            <div className="hm-empty">
+              <p className="hm-empty-title">Your wardrobe story starts here.</p>
+              <p>Wear a recommended outfit and press "I wore this" - it will appear here.</p>
             </div>
           )}
-
-          {home.favourites.length > 0 && (
-            <>
-              <h2 className="aw-section-title">Your favourites ♡</h2>
-              <ItemStrip items={home.favourites} />
-            </>
+          {recent.length > 0 && (
+            <div className="hm-recent-row">
+              {recent.map(({ key, cover, entry }) => (
+                <figure key={key} className="hm-outfit">
+                  <img src={assetUrl(cover.image_path)} alt={cover.display_name || cover.category} />
+                  <figcaption>
+                    <strong>{dayLabel(entry.worn_at)}</strong>
+                    {entry.occasion && <span>{occasionLabel(entry.occasion)}</span>}
+                  </figcaption>
+                </figure>
+              ))}
+            </div>
           )}
-        </>
-      )}
+        </section>
 
-      {!home && !error && <p className="aw-section-sub" style={{ marginTop: 24 }}>Loading your wardrobe…</p>}
+        <aside className="hm-added" aria-label="Recently added">
+          <h2>Recently added</h2>
+          {!loading && added.length === 0 && !error && (
+            <p className="hm-muted">New pieces you add will show up here.</p>
+          )}
+          {added.length > 0 && (
+            <ul className="hm-added-list">
+              {added.map((item) => (
+                <li key={item._id}>
+                  <img src={assetUrl(item.image_path)} alt="" />
+                  <span>
+                    <strong>{item.display_name || item.category}</strong>
+                    <span className="hm-muted">{dayLabel(item.created_at)}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </aside>
 
-      <OutfitDrawer outfit={open} onClose={() => setOpen(null)} actions={actions} />
+        <footer className="hm-quote">
+          <span className="hm-leaf" aria-hidden="true">❦</span>
+          <div>
+            <strong>Style is a way to say who you are</strong>
+            <span className="hm-muted">Same wardrobe. New possibilities.</span>
+          </div>
+        </footer>
+      </div>
     </Layout>
   );
 }

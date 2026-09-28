@@ -8,18 +8,12 @@ only from real data:
                               Outerwear, Shoes, Accessories)
   * style_tags(outfit)        Casual / Smart / Formal / Ethnic / Party
   * outfit_title(outfit)      "Party Night Look", "Campus Classic"...
-  * inspiration(outfit)       a Pinterest SEARCH LINK for the look
-                              (no scraping, no copied images - the user
-                              opens Pinterest themselves; if Pinterest is
-                              unreachable nothing else is affected)
   * validate_outfit(...)      the FINAL check every outfit must pass
                               before it is sent to the browser
   * matches_colour / matches_style - the page's Colour/Style filters
 """
-from urllib.parse import quote_plus
-
 from backend import outfit_builder as ob
-from backend.category_gender import is_allowed_for_account
+from backend.category_gender import is_allowed_for_account, item_allowed_for_account
 from backend.color_theory import classify_color
 from backend.style_compatibility import resolve_style
 
@@ -52,6 +46,7 @@ GROUP_BY_KIND = {
     "lehenga": "Ethnic", "anarkali": "Ethnic", "kurta": "Ethnic",
     "kurta_men": "Ethnic", "kurta_women": "Ethnic", "sherwani": "Ethnic",
     "dhoti": "Ethnic", "salwar": "Ethnic", "palazzo": "Ethnic",
+    "pajama": "Ethnic", "ethnic_set": "Ethnic", "leggings": "Bottoms",
     "blouse": "Ethnic", "petticoat": "Ethnic", "dupatta": "Ethnic",
     "jacket": "Outerwear", "coat": "Outerwear", "blazer": "Outerwear",
     "nehru": "Outerwear",
@@ -61,8 +56,6 @@ GROUP_BY_KIND = {
 
 def item_group(item):
     kind = ob.kind_for(item.get("category"))
-    if ob.is_plain_leggings(item):
-        return "Bottoms"
     if kind in GROUP_BY_KIND:
         return GROUP_BY_KIND[kind]
     if ob.ROLE.get(kind) == ob.ACCESSORY:
@@ -137,7 +130,7 @@ def style_tags(outfit):
         if role in (ob.ACCESSORY, ob.FOOTWEAR):
             continue
         styles.add(resolve_style(item.get("category"), item.get("styling")))
-    if outfit.get("style") in ("ethnic", "fusion"):
+    if outfit.get("style") == "ethnic":
         tags.add("Ethnic")
     if "casual" in styles:
         tags.add("Casual")
@@ -181,58 +174,6 @@ def matches_style(outfit, style):
     return style.strip().title() in style_tags(outfit)
 
 
-_INSPO_WORDS = {
-    "casual": "casual outfit", "day_outing": "day out outfit",
-    "college": "college outfit", "office": "office outfit",
-    "interview": "interview outfit", "date": "date night outfit",
-    "party": "party outfit", "wedding": "wedding guest outfit",
-    "traditional": "traditional ethnic outfit",
-    "sports": "gym workout outfit",
-}
-
-
-def inspiration(outfit, gender=None):
-    """A Pinterest search built from the outfit's own colours/pieces."""
-    main = [
-        item for item in outfit["items"]
-        if outfit.get("roles", {}).get(str(item.get("_id")))
-        in (ob.TOP, ob.BOTTOM, ob.ONE_PIECE)
-    ]
-    words = " ".join(display_name(item).lower() for item in main[:2])
-    who = {"male": "men", "female": "women"}.get((gender or "").lower(), "")
-    query = f"{words} {_INSPO_WORDS.get(outfit.get('occasion'), 'outfit')} {who}".strip()
-    return {
-        "title": f"Inspo: {words}" if words else "Outfit inspiration",
-        "query": query,
-        "pinterest_url": "https://www.pinterest.com/search/pins/?q=" + quote_plus(query),
-    }
-
-
-def occasion_inspiration(occasion, gender=None):
-    who = {"male": "men", "female": "women"}.get((gender or "").lower(), "")
-    base = _INSPO_WORDS.get(occasion, "outfit")
-    ideas = {
-        "party": ["black satin party look", "sequin top party outfit", "little black dress styling"],
-        "wedding": ["pastel lehenga wedding guest", "silk saree wedding look", "festive jewellery styling"],
-        "traditional": ["cotton kurta set", "handloom saree styling", "ethnic everyday look"],
-        "date": ["date night dress", "minimal date outfit", "evening top and jeans"],
-        "college": ["college outfit ideas", "jeans and top campus look", "comfy kurti with jeans"],
-        "casual": ["weekend casual outfit", "white tee and jeans", "easy summer look"],
-        "day_outing": ["brunch outfit", "sundress day out", "sightseeing outfit"],
-        "office": ["office wear ideas", "shirt and trousers workwear", "kurta office look"],
-        "interview": ["interview outfit", "formal shirt trousers", "minimal professional look"],
-        "sports": ["gym outfit ideas", "athleisure look", "running outfit"],
-    }.get(occasion, [base])
-    return [
-        {
-            "title": idea.title(),
-            "pinterest_url": "https://www.pinterest.com/search/pins/?q="
-            + quote_plus(f"{idea} {who}".strip()),
-        }
-        for idea in ideas
-    ]
-
-
 def validate_outfit(outfit, wardrobe_by_id, account_gender, occasion):
     """
     The FINAL check before an outfit reaches the user. Returns
@@ -250,7 +191,7 @@ def validate_outfit(outfit, wardrobe_by_id, account_gender, occasion):
             return False, "item is not in this user's wardrobe (deleted?)"
         if not stored.get("image_path"):
             return False, "item has no image"
-        if not is_allowed_for_account(stored.get("category"), account_gender):
+        if not item_allowed_for_account(stored, account_gender):
             return False, "item is for the other gender"
 
     roles = outfit.get("roles", {})
@@ -266,7 +207,42 @@ def validate_outfit(outfit, wardrobe_by_id, account_gender, occasion):
 
     if outfit.get("occasion") != occasion:
         return False, "wrong occasion"
-    if occasion == "traditional" and outfit.get("style") != "ethnic":
-        return False, "western piece in a traditional outfit"
+
+    # ---- traditional / western are separate modes ----
+    mode = ob.occasion_mode(occasion)
+    kinds = {item_id: ob.kind_for(wardrobe_by_id[item_id].get("category")) for item_id in ids}
+    garment_modes = {ob.garment_mode(kind) for kind in kinds.values()} - {None}
+    if len(garment_modes) > 1:
+        return False, "mixes traditional and western pieces"
+    if garment_modes and garment_modes != {mode}:
+        return False, f"{garment_modes.pop()} outfit for a {mode} occasion"
+    for item_id, kind in kinds.items():
+        role = ob.ROLE.get(kind)
+        words = ob._tokens(wardrobe_by_id[item_id].get("category"))
+        if role in (ob.SET_PART, ob.HIDDEN):
+            return False, "blouse/petticoat shown as a separate piece"
+        if role == ob.FOOTWEAR:
+            if mode == "traditional" and (kind == "boots" or words & ob.SPORTY_SHOE_WORDS):
+                return False, "sneakers/boots with traditional wear"
+            if mode == "western" and kind == "mojari":
+                return False, "mojaris with western wear"
+            if (mode == "traditional" and words & {"formal", "oxford", "oxfords"}
+                    and ob.womens_ethnic([wardrobe_by_id[i] for i in ids])):
+                return False, "office shoes with a saree/lehenga/suit"
+        if role == ob.ACCESSORY:
+            if mode == "western" and kind in ("dupatta", "head"):
+                return False, "traditional accessory with western wear"
+            if mode == "traditional" and kind == "belt":
+                return False, "belt with traditional wear"
+
+    top = [kinds[i] for i in ids if roles.get(i) == ob.TOP]
+    bottom = [kinds[i] for i in ids if roles.get(i) == ob.BOTTOM]
+    if top and bottom and bottom[0] not in ob.TOP_BOTTOM_PAIRS.get(top[0], set()):
+        return False, f"{top[0]} doesn't go with {bottom[0]}"
+
+    accessories = sum(1 for i in ids if roles.get(i) == ob.ACCESSORY)
+    limit = ob.MAX_TRADITIONAL_ACCESSORIES if mode == "traditional" else ob.MAX_ACCESSORIES
+    if accessories > limit:
+        return False, "too many accessories"
 
     return True, "ok"

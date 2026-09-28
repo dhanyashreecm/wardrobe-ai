@@ -3,7 +3,7 @@ from collections import defaultdict
 from datetime import datetime
 
 from backend import outfit_assignment, outfit_builder
-from backend.category_gender import is_allowed_for_account
+from backend.category_gender import is_allowed_for_account, item_allowed_for_account
 from backend.color_theory import outfit_color_score
 from backend.occasion_model import occasion_fit
 from backend.style_compatibility import outfit_style_score
@@ -102,10 +102,10 @@ CATEGORY_OCCASION_AFFINITY = {
     "pants": {"casual", "day_outing", "college", "office", "interview", "date"},
     "trouser": {"casual", "day_outing", "college", "office", "interview", "date"},
     "trousers": {"casual", "day_outing", "college", "office", "interview", "date"},
-    "jean": {"casual", "day_outing", "college", "date"},
-    "jeans": {"casual", "day_outing", "college", "date"},
-    "denim": {"casual", "day_outing", "college", "date"},
-    "denims": {"casual", "day_outing", "college", "date"},
+    "jean": {"casual", "day_outing", "college", "date", "party"},
+    "jeans": {"casual", "day_outing", "college", "date", "party"},
+    "denim": {"casual", "day_outing", "college", "date", "party"},
+    "denims": {"casual", "day_outing", "college", "date", "party"},
     "short": {"casual", "day_outing", "college", "sports"},
     "shorts": {"casual", "day_outing", "college", "sports"},
     "skirt": {"casual", "day_outing", "college", "date", "party"},
@@ -115,10 +115,13 @@ CATEGORY_OCCASION_AFFINITY = {
     "coat": {"casual", "college", "office", "interview", "date", "party", "day_outing"},
     # Garment types that used to be missing here silently counted as
     # suitable for EVERY occasion (a blazer for a workout).
-    "blazer": {"college", "office", "interview", "date", "party", "wedding"},
-    "blazers": {"college", "office", "interview", "date", "party", "wedding"},
-    "anarkali": {"wedding", "traditional", "party"},
-    "anarkalis": {"wedding", "traditional", "party"},
+    "blazer": {"college", "office", "interview", "date", "party"},
+    "blazers": {"college", "office", "interview", "date", "party"},
+    # Traditional wear belongs to the Traditional/Festive mode only
+    # (wedding, traditional) - never to the western occasions.
+    "anarkali": {"wedding", "traditional"},
+    "anarkalis": {"wedding", "traditional"},
+    "ethnic_set": {"wedding", "traditional"},
     "coats": {"casual", "college", "office", "interview", "date", "party", "day_outing"},
     "dress": {"casual", "day_outing", "college", "date", "party"},
     "dresses": {"casual", "day_outing", "college", "date", "party"},
@@ -126,32 +129,39 @@ CATEGORY_OCCASION_AFFINITY = {
     "sarees": {"wedding", "traditional"},
     "lehenga": {"wedding", "traditional"},
     "lehengas": {"wedding", "traditional"},
-    "kurta": {"casual", "day_outing", "college", "office", "traditional", "party", "wedding"},
-    "kurtas": {"casual", "day_outing", "college", "office", "traditional", "party"},
-    "kurti": {"casual", "day_outing", "college", "office", "traditional", "party"},
-    "kurtis": {"casual", "day_outing", "college", "office", "traditional", "party"},
-    # ---- newly-selectable IndoFashion-backed categories ------
-    "sherwani": {"wedding", "traditional", "party"},
-    "sherwanis": {"wedding", "traditional", "party"},
-    "dhoti": {"wedding", "traditional", "party"},
-    "nehru": {"office", "interview", "wedding", "traditional", "party"},
-    "blouse": {"day_outing", "traditional", "wedding", "party"},
-    "blouses": {"day_outing", "traditional", "wedding", "party"},
-    "gown": {"date", "party", "wedding"},
-    "gowns": {"date", "party", "wedding"},
-    "dupatta": {"wedding", "traditional", "party"},
-    "dupattas": {"wedding", "traditional", "party"},
-    "palazzo": {"casual", "day_outing", "college", "office", "traditional", "party"},
-    "palazzos": {"casual", "day_outing", "college", "office", "traditional", "party"},
-    "legging": {"casual", "day_outing", "college", "office", "traditional"},
-    "leggings": {"casual", "day_outing", "college", "office", "traditional"},
-    "salwar": {"casual", "day_outing", "college", "office", "traditional"},
-    "salwars": {"casual", "day_outing", "college", "office", "traditional"},
+    "kurta": {"wedding", "traditional"},
+    "kurtas": {"wedding", "traditional"},
+    "kurti": {"wedding", "traditional"},
+    "kurtis": {"wedding", "traditional"},
+    "sherwani": {"wedding", "traditional"},
+    "sherwanis": {"wedding", "traditional"},
+    "dhoti": {"wedding", "traditional"},
+    "nehru": {"wedding", "traditional"},
+    "blouse": {"wedding", "traditional"},
+    "blouses": {"wedding", "traditional"},
+    "gown": {"date", "party"},
+    "gowns": {"date", "party"},
+    "dupatta": {"wedding", "traditional"},
+    "dupattas": {"wedding", "traditional"},
+    "palazzo": {"wedding", "traditional"},
+    "palazzos": {"wedding", "traditional"},
+    "pajama": {"wedding", "traditional"},
+    # plain leggings: athleisure with a tee, or under a kurti
+    "leggings": {"casual", "day_outing", "college", "sports", "traditional"},
+    "legging": {"casual", "day_outing", "college", "sports", "traditional"},
+    "salwar": {"wedding", "traditional"},
+    "salwars": {"wedding", "traditional"},
 }
 
 
 SPORTSWEAR_WORDS = {"track", "trackpants", "jogger", "joggers", "sweatpants",
-                    "tracksuit", "gym", "activewear", "sportswear", "yoga", "running"}
+                    "tracksuit", "gym", "activewear", "sportswear", "yoga", "running",
+                    "sports", "sport", "jersey", "athletic"}
+
+# "Formal Shirt" / "Formal Trousers": workwear, dinner at most - never
+# casual, college or a party. "Casual Shirt": never an interview.
+FORMAL_GARMENT_OCCASIONS = {"office", "interview"}
+CASUAL_SHIRT_OCCASIONS = {"casual", "day_outing", "college", "date", "party"}
 
 _KIND_TO_AFFINITY_KEY = {
     "kurta_men": "kurta",
@@ -184,14 +194,18 @@ def infer_occasions_for_category(category):
     # trousers, and leggings (not salwars) are fine for a workout.
     words = _tokens(category)
     if words & SPORTSWEAR_WORDS:
-        return {"casual", "day_outing", "sports"}
+        return {"casual", "day_outing", "college", "sports"}
 
     kind = outfit_builder.kind_for(category)
+    garment = outfit_builder.ROLE.get(kind) in (
+        outfit_builder.TOP, outfit_builder.BOTTOM, outfit_builder.LAYER)
+    if garment and "formal" in words:
+        return set(FORMAL_GARMENT_OCCASIONS)
+    if kind == "shirt" and "casual" in words:
+        return set(CASUAL_SHIRT_OCCASIONS)
     affinity_key = _KIND_TO_AFFINITY_KEY.get(kind, kind)
     if affinity_key in CATEGORY_OCCASION_AFFINITY:
         occasions = set(CATEGORY_OCCASION_AFFINITY[affinity_key])
-        if kind == "salwar" and words & {"legging", "leggings"}:
-            occasions.add("sports")
         return occasions
 
     tokens = _tokens(category)
@@ -836,7 +850,7 @@ def _filter_by_gender(wardrobe_items, account_gender):
 
     return [
         item for item in wardrobe_items
-        if is_allowed_for_account(item.get("category"), account_gender)
+        if item_allowed_for_account(item, account_gender)
     ]
 
 
@@ -971,7 +985,7 @@ def _cold_weather_penalty(core_kinds, weather):
     return 0, []
 
 
-ETHNIC_ONLY_OCCASIONS = {"traditional"}
+TRADITIONAL_OCCASIONS = outfit_builder.TRADITIONAL_OCCASIONS
 
 
 def _core_candidates(gender_ok, activity, feedback):
@@ -992,20 +1006,21 @@ def _core_candidates(gender_ok, activity, feedback):
         if not key or key in candidates or feedback.get(key) == "dislike":
             continue
 
-        # A blouse follows its saree/lehenga, so only the main pieces
-        # decide which occasions the outfit suits.
-        deciding = [
-            item for kind, item in core
-            if outfit_builder.ROLE.get(kind) != outfit_builder.SET_PART
-        ]
+        deciding = list(core_items)
         eligible = set(CANONICAL_OCCASIONS)
         for item in deciding:
             eligible &= effective_occasions(item.get("category"), item.get("occasion"))
 
-        # Traditional is ETHNIC-ONLY: no western pieces
-        # and no Indo-western mixes (kurta + jeans) there.
-        if outfit_builder.outfit_style(core_kinds) != "ethnic":
-            eligible -= ETHNIC_ONLY_OCCASIONS
+        # Two separate modes: traditional outfits only for the
+        # traditional/festive occasions, western outfits only for the
+        # western ones - whatever a manual occasion tag says.
+        style = outfit_builder.outfit_style(core_kinds)
+        if style == "mixed":
+            continue
+        if style == "ethnic":
+            eligible &= TRADITIONAL_OCCASIONS
+        else:
+            eligible -= TRADITIONAL_OCCASIONS
 
         if not eligible:
             continue
@@ -1283,12 +1298,21 @@ def describe_missing_pieces(wardrobe_items, occasion="casual", account_gender=No
         ]
 
     groups = outfit_builder.classify_items(filtered)
-    groups[outfit_builder.SET_PART] = outfit_builder.classify_items(
-        gender_ok
-    )[outfit_builder.SET_PART]
+    mode = outfit_builder.occasion_mode(occasion)
+    wanted = "ethnic" if mode == "traditional" else "western"
 
-    if any(True for _ in outfit_builder.core_combinations(groups)):
+    if any(
+        outfit_builder.outfit_style([k for k, _ in combo["core"]]) == wanted
+        for combo in outfit_builder.core_combinations(groups)
+    ):
         return []
+
+    if mode == "traditional":
+        return [
+            f"Your wardrobe doesn't have a complete traditional outfit for "
+            f"{label} yet (a saree, lehenga, anarkali, salwar suit, or a "
+            f"kurta with its salwar/palazzo/pajama/dhoti)."
+        ]
 
     tops = groups[outfit_builder.TOP]
     bottoms = groups[outfit_builder.BOTTOM]
@@ -1325,12 +1349,6 @@ def describe_missing_pieces(wardrobe_items, occasion="casual", account_gender=No
         return [
             f"Your wardrobe does not contain a suitable top to pair "
             f"with your {label} bottoms."
-        ]
-
-    if groups[outfit_builder.SET_PART]:
-        return [
-            f"You have blouses, but no saree or lehenga suitable for "
-            f"{label} to wear them with."
         ]
 
     return [
