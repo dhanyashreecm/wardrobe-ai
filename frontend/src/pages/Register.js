@@ -46,6 +46,17 @@ function Register() {
       return;
     }
 
+    // Quick check before the round trip; the server validates properly.
+    if (!/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(email.trim())) {
+      setError("Please enter a valid email address");
+      return;
+    }
+
+    if (password.length < 6) {
+      setError("Password must be at least 6 characters");
+      return;
+    }
+
     if (gender !== "Male" && gender !== "Female") {
       setError("Please choose Men or Women to continue - this can't be changed later.");
       return;
@@ -60,7 +71,14 @@ function Register() {
         // Done its job - clear it so a later visit to Login/Register
         // for a DIFFERENT new account doesn't silently inherit it.
         localStorage.removeItem("genderPreference");
-        navigate("/login");
+        if (res.data.verification_required) {
+          // New accounts stay inactive until the emailed code is entered.
+          navigate("/verify-email", {
+            state: { email: res.data.email, notice: res.data.message }
+          });
+        } else {
+          navigate("/login");
+        }
       } else {
         setError(res.data.message || "Registration failed");
       }
@@ -127,13 +145,16 @@ function Register() {
               onChange={(e) => setName(e.target.value)}
             />
             <input
-              placeholder="Email address"
+              placeholder="Email address (e.g. you@gmail.com)"
+              type="email"
+              autoComplete="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
             />
             <input
-              placeholder="Password"
+              placeholder="Password (at least 6 characters)"
               type="password"
+              autoComplete="new-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />

@@ -3,23 +3,17 @@ from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from flask_jwt_extended import (
     JWTManager,
-    create_access_token,
     jwt_required,
     get_jwt_identity
 )
-from backend import email_service
+from backend.auth_routes import auth_blueprint
 from backend.auth import (
-    register_user,
-    verify_login,
     get_user_gender,
     migrate_user_gender,
     get_user_profile,
     update_user_profile,
     set_profile_picture,
     delete_user_account,
-    create_password_reset_code,
-    reset_password_with_code,
-    RESET_CODE_MINUTES,
 )
 from backend.wardrobe import (
     add_item,
@@ -300,147 +294,15 @@ def current_user_email():
 
 
 # =========================================================
-# REGISTER
+# REGISTER / VERIFY EMAIL / LOGIN / FORGOT + RESET PASSWORD
+#
+# Same URLs as before (/api/register, /api/login, /api/password/*),
+# plus /api/verify-email and /api/verify-email/resend. They live in
+# backend/auth_routes.py so they can be tested without loading the
+# ML stack - see that file for the security rules.
 # =========================================================
 
-@app.route("/api/register", methods=["POST"])
-def register():
-
-    data = request.json
-
-    name = (data.get("name") or "").strip()
-    email = normalize_email(data.get("email"))
-    password = data.get("password")
-    # Gender is MANDATORY now - never trust a value from the client
-    # beyond reading it here; register_user() is the actual gate
-    # that rejects anything that isn't exactly "Male" or "Female".
-    gender = data.get("gender")
-
-    if not name or not email or not password:
-
-        return jsonify({
-            "success": False,
-            "message": "All fields required"
-        }), 400
-
-    result = register_user(
-        name,
-        email,
-        password,
-        gender
-    )
-
-    # A welcome message, sent on a BACKGROUND thread so the browser
-    # gets its response immediately and a slow or broken mail server
-    # can never turn a successful registration into a failed one.
-    # Silently does nothing when SMTP is not configured.
-    if result["success"] and config.SEND_WELCOME_EMAIL:
-        email_service.send_welcome_email(name, email)
-
-    status_code = (
-        200
-        if result["success"]
-        else 400
-    )
-
-    return jsonify(result), status_code
-
-
-# =========================================================
-# LOGIN
-# =========================================================
-
-@app.route("/api/login", methods=["POST"])
-def login():
-
-    data = request.json or {}
-
-    email = normalize_email(data.get("email"))
-    password = data.get("password") or ""
-
-    if not email or not password:
-        return jsonify({
-            "success": False,
-            "message": "Enter your email and password"
-        }), 400
-
-    result = verify_login(
-        email,
-        password
-    )
-
-    if result["success"]:
-
-        # The ACCOUNT's canonical email, not the string as typed - so
-        # the same account gets the same identity (and so the same
-        # wardrobe) on every device, however the address was typed.
-        token = create_access_token(
-            identity=result["email"]
-        )
-
-        result["token"] = token
-
-        # "Welcome back" - sent only on a SUCCESSFUL login, and only
-        # to the address stored on the account, so a failed guess at
-        # someone else's email can never trigger mail to them. Same
-        # background thread and same silence-when-unconfigured as
-        # registration above.
-        if config.SEND_LOGIN_EMAIL:
-            email_service.send_signin_email(
-                result.get("name"), result.get("email") or email
-            )
-
-        return jsonify(result), 200
-
-    else:
-
-        return jsonify(result), 401
-
-
-# =========================================================
-# FORGOT PASSWORD
-# =========================================================
-
-@app.route("/api/password/forgot", methods=["POST"])
-def forgot_password():
-    data = request.json or {}
-    email = normalize_email(data.get("email"))
-
-    if not email:
-        return jsonify({"success": False, "message": "Enter your email address"}), 400
-
-    if not config.email_configured():
-        return jsonify({
-            "success": False,
-            "message": "Password reset by email isn't set up on the server yet."
-        }), 503
-
-    result = create_password_reset_code(email)
-    if result["status"] == "ok":
-        email_service.send_password_reset_code(
-            result.get("name"), email, result["code"], RESET_CODE_MINUTES
-        )
-
-    # Same answer whether or not the account exists.
-    return jsonify({
-        "success": True,
-        "message": "If an account exists for this email, a 6-digit code has been sent. "
-                   "Check your inbox (and spam)."
-    }), 200
-
-
-@app.route("/api/password/reset", methods=["POST"])
-def reset_password():
-    data = request.json or {}
-    email = normalize_email(data.get("email"))
-    code = (data.get("code") or "").strip()
-    new_password = data.get("new_password") or ""
-
-    if not email or not code:
-        return jsonify({"success": False, "message": "Email and code are required"}), 400
-
-    result = reset_password_with_code(email, code, new_password)
-    return jsonify(result), (200 if result["success"] else 400)
+app.register_blueprint(auth_blueprint)
 
 
 # =========================================================

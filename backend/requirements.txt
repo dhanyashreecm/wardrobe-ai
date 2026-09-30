@@ -42,3 +42,6 @@ gradio_client
 # free). Without it the app uses OpenCV GrabCut, which is built in.
 # The first upload after installing downloads a ~170 MB model once.
 #   pip install "rembg[cpu]"
+#   tzdata     - time-zone database for zoneinfo. Windows ships none,
+#                so without it login emails fall back to UTC there.
+tzdata

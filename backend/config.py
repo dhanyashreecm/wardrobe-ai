@@ -284,6 +284,42 @@ def email_configured():
 
 
 # ============================================================
+# EMAIL VERIFICATION & LOGIN SECURITY (see auth.py / auth_routes.py)
+#
+# REQUIRE_EMAIL_VERIFICATION: new accounts must enter a 6-digit code
+# mailed to them before they can log in. Accounts that existed before
+# this setting was introduced are NOT affected - they have no
+# "email_verified" field and are treated as already verified, so
+# nobody has to register again.
+#
+# With this on but SMTP not configured, registration is refused with a
+# clear message (a code could never arrive). For offline development
+# only, set REQUIRE_EMAIL_VERIFICATION=false.
+# ============================================================
+
+REQUIRE_EMAIL_VERIFICATION = _flag("REQUIRE_EMAIL_VERIFICATION", True)
+
+# Optional: restrict NEW registrations to these email domains, comma
+# separated, e.g. "gmail.com,googlemail.com". Blank = any valid address.
+# Existing accounts on other domains keep working either way.
+ALLOWED_EMAIL_DOMAINS = tuple(
+    d.strip().lower().lstrip("@")
+    for d in _get("ALLOWED_EMAIL_DOMAINS").split(",")
+    if d.strip()
+)
+
+# Only set this to true when the backend runs behind a proxy/CDN you
+# control (Cloudflare, Vercel, Render, nginx...). It lets the app read
+# the real client IP from X-Forwarded-For and an approximate city/
+# country from the provider's geo headers. Off by default because on a
+# directly exposed server those headers can be forged by anyone.
+TRUST_PROXY_HEADERS = _flag("TRUST_PROXY_HEADERS", False)
+
+# Time zone used in login emails when the device doesn't report one.
+LOGIN_EMAIL_DEFAULT_TIMEZONE = _get("LOGIN_EMAIL_DEFAULT_TIMEZONE", "Asia/Kolkata")
+
+
+# ============================================================
 # VIRTUAL TRY-ON (optional - see virtual_tryon.py)
 #
 # WHY IT IS CONFIGURED THIS WAY
@@ -458,6 +494,15 @@ def warnings():
             "Set SMTP_USERNAME and SMTP_PASSWORD in .env to enable it."
         )
 
+    if REQUIRE_EMAIL_VERIFICATION and not email_configured():
+        found.append(
+            "REQUIRE_EMAIL_VERIFICATION is on but outgoing email is not "
+            "configured - NEW registrations will be refused because no "
+            "verification code could be delivered. Existing accounts can "
+            "still log in. Configure SMTP, or set "
+            "REQUIRE_EMAIL_VERIFICATION=false for offline development."
+        )
+
     if not tryon_configured():
         found.append(
             "Virtual try-on is not configured - every other feature works "
@@ -502,6 +547,9 @@ def describe_startup():
     )
     lines.append(
         f"  Email         : {'configured' if email_configured() else 'not configured'}"
+    )
+    lines.append(
+        f"  Email verify  : {'required for new accounts' if REQUIRE_EMAIL_VERIFICATION else 'off'}"
     )
     lines.append(
         f"  Virtual try-on: {'configured' if tryon_configured() else 'not configured'}"

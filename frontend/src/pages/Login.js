@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
 import axios from "axios";
-import { useNavigate, Link } from "react-router-dom";
+import { useNavigate, useLocation, Link } from "react-router-dom";
 import "../App.css";
 import { API_URL } from "../config";
+import { clientHints } from "../lib/clientInfo";
 
 // Shown on the Login page purely as a convenience PRE-FILL for the
 // Register screen (this is where a NEW account's choice is actually
@@ -15,9 +16,12 @@ const GENDER_OPTIONS = [
 ];
 
 function Login() {
-  const [email, setEmail] = useState("");
+  const location = useLocation();
+  // Arriving from Verify Email: pre-fill the address and say it worked.
+  const [email, setEmail] = useState(location.state?.email || "");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [notice] = useState(location.state?.notice || "");
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
@@ -60,7 +64,9 @@ function Login() {
       const res = await axios.post(`${API_URL}/api/login`, {
         // The server normalises too; doing it here keeps what the
         // user sees consistent with the one account it maps to.
-        email: email.trim().toLowerCase(), password
+        email: email.trim().toLowerCase(), password,
+        // Time zone / installed-app hints for the "new login" email.
+        client: clientHints()
       });
       if (res.data.success) {
         if (res.data.gender) {
@@ -77,7 +83,19 @@ function Login() {
         }
       }
     } catch (err) {
-      setError(err.response?.data?.message || "Login failed");
+      const data = err.response?.data || {};
+      if (data.code === "email_not_verified") {
+        // Right password, but the address was never confirmed - no
+        // token was issued. A fresh code has been emailed.
+        navigate("/verify-email", {
+          state: { email: data.email || email.trim().toLowerCase(), notice: data.message }
+        });
+        return;
+      }
+      setError(
+        data.message ||
+        (err.response ? "Login failed" : "Can't reach the server. Is the backend running?")
+      );
     } finally {
       setLoading(false);
     }
@@ -324,12 +342,15 @@ function Login() {
           <form onSubmit={handleSubmit}>
             <input
               placeholder="Email address"
+              type="email"
+              autoComplete="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
             />
             <input
               placeholder="Password"
               type="password"
+              autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
@@ -338,6 +359,7 @@ function Login() {
             </button>
           </form>
 
+          {notice && !error && <p style={{ color: "#3f7a4f", marginTop: "10px" }}>{notice}</p>}
           {error && <p className="error">{error}</p>}
 
           <p className="switch-link" style={{ marginTop: "12px" }}>

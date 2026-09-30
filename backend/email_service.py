@@ -308,3 +308,145 @@ def send_password_reset_code(name, email_address, code, minutes):
     )
 
     return send_async(email_address, subject, text_body, html_body)
+
+
+# ============================================================
+# EMAIL VERIFICATION + LOGIN NOTIFICATION
+# ============================================================
+
+BRAND = "Wardrobe-AI"
+
+
+def _branded(heading, inner_html, footer="Wardrobe-AI Security Team"):
+    """
+    Branded layout for security mail. `inner_html` must already be
+    escaped by the caller - every value in it that came from a user or
+    a request header goes through html.escape first.
+    """
+    return f"""\
+<html>
+  <body style="margin:0;padding:24px;background:#f5f0ea;
+               font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+               color:#20201e;">
+    <div style="max-width:540px;margin:0 auto;background:#ffffff;
+                border:1px solid #e8dfd5;border-radius:12px;overflow:hidden;">
+      <div style="background:#3a2a1f;color:#ffffff;padding:18px 28px;
+                  font-size:18px;font-weight:700;letter-spacing:.3px;">
+        &#128090; {BRAND}
+      </div>
+      <div style="padding:28px;">
+        <h1 style="margin:0 0 18px;font-size:20px;font-weight:600;">{heading}</h1>
+        {inner_html}
+        <p style="margin:24px 0 0;padding-top:16px;border-top:1px solid #e8dfd5;
+                  font-size:13px;color:#6b6862;">
+          Thank you,<br>{html.escape(footer)}
+        </p>
+      </div>
+    </div>
+  </body>
+</html>"""
+
+
+def send_verification_code(name, email_address, code, minutes):
+    """
+    Sent at registration (and on "resend code"). Carries the 6-digit
+    code only - never the password.
+    """
+    plain_name = (name or "there").strip() or "there"
+    safe_name = html.escape(plain_name)
+    safe_code = html.escape(str(code))
+
+    subject = f"Verify your {BRAND} email - code {code}"
+
+    text_body = (
+        f"Hi {plain_name},\n\n"
+        f"Welcome to {BRAND}! To finish creating your account, enter this "
+        f"verification code in the app:\n\n    {code}\n\n"
+        f"The code expires in {minutes} minutes.\n\n"
+        f"If you didn't create a {BRAND} account, you can ignore this email - "
+        "no account will be activated without this code.\n\n"
+        f"Thank you,\n{BRAND} Team\n"
+    )
+
+    inner = (
+        f'<p style="margin:0 0 14px;line-height:1.55;">Hi {safe_name},</p>'
+        f'<p style="margin:0 0 14px;line-height:1.55;">To finish creating your '
+        f'account, enter this verification code in the app:</p>'
+        f'<p style="margin:0 0 14px;font-size:30px;font-weight:700;letter-spacing:8px;">'
+        f'{safe_code}</p>'
+        f'<p style="margin:0 0 14px;line-height:1.55;">The code expires in {int(minutes)} minutes.</p>'
+        f'<p style="margin:0 0 14px;line-height:1.55;color:#6b6862;">If you didn&#39;t '
+        f'create a {BRAND} account, you can ignore this email - no account will be '
+        f'activated without this code.</p>'
+    )
+
+    return send_async(email_address, subject, text_body,
+                      _branded("Verify your email address", inner, f"{BRAND} Team"))
+
+
+def build_login_notification(name, details):
+    """
+    (subject, text_body, html_body) for a successful login.
+
+    `details` comes from login_context.describe_login(). It never
+    contains - and this function never adds - the password or the
+    login token.
+    """
+    plain_name = (name or "").strip()
+    greeting = f"Hello {plain_name}," if plain_name else "Hello,"
+    location = details.get("location") or "Not available"
+
+    rows = [
+        ("Date", details.get("date") or "Unknown"),
+        ("Time", details.get("time") or "Unknown"),
+        ("Device", details.get("device") or "Unknown device"),
+        ("Browser", details.get("browser") or "Unknown browser"),
+        ("Location", location),
+    ]
+    if details.get("ip"):
+        rows.append(("IP address", details["ip"]))
+
+    subject = f"New Login to Your {BRAND} Account"
+
+    text_body = (
+        f"{greeting}\n\n"
+        f"Your {BRAND} account was successfully accessed.\n\n"
+        "Login details:\n"
+        + "".join(f"  - {label}: {value}\n" for label, value in rows)
+        + "\nIf this was you, no action is required.\n\n"
+        "If you don't recognize this login, please change your password "
+        "immediately (use 'Forgot password' on the login page) and secure "
+        "your account.\n\n"
+        f"Thank you,\n{BRAND} Security Team\n"
+    )
+
+    table = "".join(
+        f'<tr><td style="padding:6px 12px 6px 0;color:#6b6862;white-space:nowrap;'
+        f'vertical-align:top;">{html.escape(label)}</td>'
+        f'<td style="padding:6px 0;font-weight:600;">{html.escape(str(value))}</td></tr>'
+        for label, value in rows
+    )
+
+    inner = (
+        f'<p style="margin:0 0 14px;line-height:1.55;">{html.escape(greeting)}</p>'
+        f'<p style="margin:0 0 14px;line-height:1.55;">Your {BRAND} account was '
+        f'successfully accessed.</p>'
+        f'<table style="border-collapse:collapse;margin:0 0 18px;font-size:14px;">{table}</table>'
+        f'<p style="margin:0 0 14px;line-height:1.55;">If this was you, no action is required.</p>'
+        f'<div style="margin:0 0 6px;padding:12px 14px;background:#fdf1ea;'
+        f'border-left:4px solid #c1694f;border-radius:6px;line-height:1.5;">'
+        f'<strong>Don&#39;t recognize this login?</strong> Change your password '
+        f'immediately using <em>Forgot password</em> on the login page, and secure '
+        f'your account.</div>'
+    )
+
+    return subject, text_body, _branded("New login to your account", inner)
+
+
+def send_login_notification(name, email_address, details):
+    """
+    Background send - a slow or broken mail server can never delay or
+    fail the login itself (see the module docstring).
+    """
+    subject, text_body, html_body = build_login_notification(name, details)
+    return send_async(email_address, subject, text_body, html_body)

@@ -1,4 +1,5 @@
 import bcrypt
+import re
 import secrets
 from datetime import datetime, timedelta
 from pymongo.errors import DuplicateKeyError
@@ -10,6 +11,12 @@ from backend.identity import normalize_email, email_match_filter
 # a single source of truth so register/migrate can't drift apart on
 # what's valid.
 VALID_GENDERS = {"Male", "Female"}
+
+# Brute-force protection for the login form: after this many wrong
+# passwords in a row the account refuses logins for LOCKOUT_MINUTES.
+# A successful password reset lifts the lock immediately.
+MAX_FAILED_LOGINS = 5
+LOCKOUT_MINUTES = 15
 
 
 # =========================================================
@@ -67,7 +74,72 @@ def check_password(password, stored_hash):
         return False
 
 
-def register_user(name, email, password, gender=None):
+# =========================================================
+# EMAIL ADDRESS VALIDATION
+#
+# A practical check, not the full RFC 5322 grammar: it accepts every
+# address a real person types (dots, plus-tags, subdomains, new TLDs)
+# and rejects the typos that would make a verification code
+# undeliverable ("name@gmail", "name@@gmail.com", "name@gmail..com").
+# Ownership is proven separately by the emailed code - this only
+# stops obviously broken addresses before we try to send to them.
+# =========================================================
+
+MAX_EMAIL_LENGTH = 254
+MAX_NAME_LENGTH = 100
+_LOCAL_PART = re.compile(r"^[a-z0-9!#$%&'*+/=?^_`{|}~-]+(\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*$")
+_DOMAIN_LABEL = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
+_GMAIL_DOMAINS = {"gmail.com", "googlemail.com"}
+
+
+def validate_email_address(email, allowed_domains=()):
+    """
+    Returns None when `email` (already normalised) is acceptable for a
+    NEW registration, otherwise a message to show the user.
+    Only used at registration - existing accounts are never
+    re-validated, so nobody gets locked out by a stricter rule.
+    """
+    if not email or len(email) > MAX_EMAIL_LENGTH or email.count("@") != 1:
+        return "Please enter a valid email address"
+
+    local, domain = email.split("@")
+    labels = domain.split(".")
+
+    if (not local or len(local) > 64 or not _LOCAL_PART.match(local)
+            or len(labels) < 2
+            or not all(_DOMAIN_LABEL.match(label) for label in labels)
+            or not re.match(r"^[a-z]{2,}$", labels[-1])):
+        return "Please enter a valid email address"
+
+    if domain in _GMAIL_DOMAINS:
+        # Gmail usernames are letters, digits and dots only (a "+tag"
+        # after them is allowed and delivered to the same inbox).
+        username = local.split("+", 1)[0]
+        if not re.match(r"^[a-z0-9.]+$", username) or username.startswith(".") \
+                or username.endswith(".") or ".." in username:
+            return "That doesn't look like a valid Gmail address"
+
+    if allowed_domains and domain not in allowed_domains:
+        return ("Please register with an address ending in "
+                + " or ".join("@" + d for d in allowed_domains))
+
+    return None
+
+
+def is_email_verified(user):
+    """
+    Accounts created before email verification existed have no
+    "email_verified" field at all, and are treated as verified - they
+    were already in use, and forcing them through a new step (or to
+    register again) is exactly what this upgrade must not do. Only an
+    explicit False, which register_user() writes for new accounts,
+    means "not verified yet".
+    """
+    return (user or {}).get("email_verified", True) is not False
+
+
+def register_user(name, email, password, gender=None,
+                  require_verification=False, allowed_domains=()):
     """
     Gender is now MANDATORY and PERMANENTLY LOCKED at registration:
     once set here, nothing in this codebase ever updates it again
@@ -89,16 +161,45 @@ def register_user(name, email, password, gender=None):
         }
 
     email = normalize_email(email)
+    name = (name or "").strip()
 
-    if not email or "@" not in email:
-        return {"success": False, "message": "Please enter a valid email address"}
+    problem = validate_email_address(email, allowed_domains)
+    if problem:
+        return {"success": False, "message": problem}
+
+    if not name or len(name) > MAX_NAME_LENGTH:
+        return {"success": False,
+                "message": f"Please enter your name (up to {MAX_NAME_LENGTH} characters)"}
+
+    if not isinstance(password, str) or len(password) < MIN_PASSWORD_LENGTH:
+        return {"success": False,
+                "message": f"Password must be at least {MIN_PASSWORD_LENGTH} characters"}
+
+    hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt())
 
     # Case-insensitive: "Ganga@Gmail.com" must find the existing
     # "ganga@gmail.com" account rather than create a second one.
-    if find_user_by_email(email):
-        return {"success": False, "message": "Email already registered"}
-
-    hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt())
+    existing = find_user_by_email(email)
+    if existing:
+        if is_email_verified(existing):
+            return {"success": False, "message": "Email already registered"}
+        # An account that was registered but NEVER verified proves
+        # nothing about who owns the address - it may even be someone
+        # else squatting on it. Registering again replaces it (and a
+        # fresh code goes to the real inbox), so an unverified sign-up
+        # can never permanently block the mailbox's owner.
+        users_collection.update_one(
+            {"_id": existing["_id"]},
+            {"$set": {
+                "name": name,
+                "password_hash": hashed,
+                "gender": gender,
+                "created_at": datetime.utcnow(),
+                "email_verified": False,
+            }}
+        )
+        return {"success": True, "verification_required": True,
+                "message": "Registration successful"}
 
     user = {
         "name": name,
@@ -107,6 +208,8 @@ def register_user(name, email, password, gender=None):
         "gender": gender,
         "created_at": datetime.utcnow()
     }
+    if require_verification:
+        user["email_verified"] = False
 
     try:
         users_collection.insert_one(user)
@@ -114,7 +217,8 @@ def register_user(name, email, password, gender=None):
         # The unique index (db.ensure_indexes) caught a registration
         # racing another one for the same address.
         return {"success": False, "message": "Email already registered"}
-    return {"success": True, "message": "Registration successful"}
+    return {"success": True, "verification_required": bool(require_verification),
+            "message": "Registration successful"}
 
 
 def verify_login(email, password):
@@ -139,19 +243,60 @@ def verify_login(email, password):
                        "'Forgot password' to set a new one.",
         }
 
-    if check_password(password, user.get("password_hash")):
+    now = datetime.utcnow()
+    locked_until = user.get("login_locked_until")
+    if locked_until and now < locked_until:
+        minutes = max(1, int((locked_until - now).total_seconds() // 60) + 1)
         return {
-            "success": True,
-            "name": user.get("name"),
-            "email": normalize_email(user.get("email")),
-            # None here means a pre-existing account created before
-            # gender became mandatory. The frontend treats a missing
-            # gender as "needs one-time setup" (see Login.js) rather
-            # than ever silently assigning one.
-            "gender": user.get("gender")
+            "success": False,
+            "code": "account_locked",
+            "message": f"Too many failed login attempts. Try again in {minutes} "
+                       "minute(s), or use 'Forgot password'.",
         }
-    else:
+
+    if not check_password(password, user.get("password_hash")):
+        failures = int(user.get("failed_login_attempts") or 0) + 1
+        if failures >= MAX_FAILED_LOGINS:
+            users_collection.update_one(
+                {"_id": user["_id"]},
+                {"$set": {"failed_login_attempts": 0,
+                          "login_locked_until": now + timedelta(minutes=LOCKOUT_MINUTES)}}
+            )
+        else:
+            users_collection.update_one(
+                {"_id": user["_id"]}, {"$set": {"failed_login_attempts": failures}}
+            )
         return {"success": False, "message": "Incorrect password"}
+
+    if user.get("failed_login_attempts") or user.get("login_locked_until"):
+        users_collection.update_one(
+            {"_id": user["_id"]},
+            {"$unset": {"failed_login_attempts": "", "login_locked_until": ""}}
+        )
+
+    # Checked only AFTER the password, so a wrong guess can't be used
+    # to learn whether an account is verified. No token is issued for
+    # an unverified account - every protected route needs a token, so
+    # this is the one gate that keeps it out of the whole app.
+    if not is_email_verified(user):
+        return {
+            "success": False,
+            "code": "email_not_verified",
+            "email": normalize_email(user.get("email")),
+            "message": "Please verify your email address first - enter the "
+                       "6-digit code we emailed you.",
+        }
+
+    return {
+        "success": True,
+        "name": user.get("name"),
+        "email": normalize_email(user.get("email")),
+        # None here means a pre-existing account created before
+        # gender became mandatory. The frontend treats a missing
+        # gender as "needs one-time setup" (see Login.js) rather
+        # than ever silently assigning one.
+        "gender": user.get("gender")
+    }
 
 
 def get_user_profile(email):
@@ -384,8 +529,94 @@ def reset_password_with_code(email, code, new_password):
 
     users_collection.update_one(
         {"_id": user["_id"]},
-        {"$set": {"password_hash": bcrypt.hashpw(new_password.encode("utf-8"), bcrypt.gensalt())},
+        {"$set": {"password_hash": bcrypt.hashpw(new_password.encode("utf-8"), bcrypt.gensalt()),
+                  # Using a code from the inbox proves the address is
+                  # theirs, so this also completes email verification.
+                  "email_verified": True},
          "$unset": {"reset_code_hash": "", "reset_expires_at": "",
-                    "reset_attempts": "", "reset_requested_at": ""}}
+                    "reset_attempts": "", "reset_requested_at": "",
+                    "failed_login_attempts": "", "login_locked_until": ""}}
     )
     return {"success": True, "message": "Password changed. You can log in now."}
+
+
+# =========================================================
+# EMAIL VERIFICATION (6-digit code sent at registration)
+#
+# Same design as the reset code above: only a bcrypt hash of the code
+# is stored, it expires, wrong guesses are capped, re-sends are
+# throttled, and it is wiped once used.
+# =========================================================
+
+VERIFY_CODE_MINUTES = 15
+VERIFY_MAX_ATTEMPTS = 5
+VERIFY_RESEND_SECONDS = 60
+
+
+def create_email_verification_code(email):
+    """
+    Returns {"status": "ok", "code", "name", "email"} when a code was
+    made, otherwise {"status": "no_account" | "already_verified" |
+    "too_soon"}. Routes never reveal which non-ok status happened.
+    """
+    user = find_user_by_email(email)
+    if not user:
+        return {"status": "no_account"}
+    if is_email_verified(user):
+        return {"status": "already_verified"}
+
+    now = datetime.utcnow()
+    last = user.get("verify_requested_at")
+    if last and (now - last).total_seconds() < VERIFY_RESEND_SECONDS:
+        return {"status": "too_soon"}
+
+    code = f"{secrets.randbelow(1000000):06d}"
+    users_collection.update_one(
+        {"_id": user["_id"]},
+        {"$set": {
+            "verify_code_hash": bcrypt.hashpw(code.encode("utf-8"), bcrypt.gensalt()),
+            "verify_expires_at": now + timedelta(minutes=VERIFY_CODE_MINUTES),
+            "verify_attempts": 0,
+            "verify_requested_at": now,
+        }}
+    )
+    return {"status": "ok", "code": code, "name": user.get("name"),
+            "email": normalize_email(user.get("email"))}
+
+
+def verify_email_with_code(email, code):
+    invalid = {"success": False, "message": "Invalid or expired code. Request a new one."}
+    user = find_user_by_email(email)
+
+    if not user:
+        return invalid
+
+    if is_email_verified(user):
+        return {"success": True, "already_verified": True,
+                "message": "Your email is already verified. You can log in."}
+
+    if not user.get("verify_code_hash"):
+        return invalid
+
+    if datetime.utcnow() > user.get("verify_expires_at", datetime.min):
+        return invalid
+
+    if user.get("verify_attempts", 0) >= VERIFY_MAX_ATTEMPTS:
+        return {"success": False, "message": "Too many wrong codes. Request a new one."}
+
+    if not check_password(str(code).strip(), user["verify_code_hash"]):
+        attempts = user.get("verify_attempts", 0) + 1
+        users_collection.update_one({"_id": user["_id"]},
+                                    {"$set": {"verify_attempts": attempts}})
+        left = VERIFY_MAX_ATTEMPTS - attempts
+        return {"success": False,
+                "message": f"Wrong code. {left} attempt(s) left." if left > 0
+                           else "Too many wrong codes. Request a new one."}
+
+    users_collection.update_one(
+        {"_id": user["_id"]},
+        {"$set": {"email_verified": True, "email_verified_at": datetime.utcnow()},
+         "$unset": {"verify_code_hash": "", "verify_expires_at": "",
+                    "verify_attempts": "", "verify_requested_at": ""}}
+    )
+    return {"success": True, "message": "Email verified! You can log in now."}
