@@ -364,6 +364,37 @@ except ValueError:
     TRYON_MAX_UPLOAD_MB = 8
 
 
+# How many try-ons ONE ACCOUNT may generate per day (see
+# tryon_usage.py). This is a fairness limit inside this application,
+# not the GPU allowance: the free Hugging Face Space has its own daily
+# quota belonging to the Space's account, and raising the number here
+# buys no extra GPU time - it only changes how much of the shared
+# allowance a single user may spend before others get a turn.
+try:
+    TRYON_DAILY_LIMIT = int(_get("TRYON_DAILY_LIMIT", "10") or "10")
+except ValueError:
+    TRYON_DAILY_LIMIT = 10
+
+if TRYON_DAILY_LIMIT < 1:
+    TRYON_DAILY_LIMIT = 10
+
+# Midnight in WHICH timezone the daily count resets, as a fixed offset
+# from UTC. Default +5.5 = India.
+#
+# An offset rather than a named zone ("Asia/Kolkata") deliberately:
+# zoneinfo needs the tzdata package on Windows and raises
+# ZoneInfoNotFoundError without it, so a named zone would work on the
+# Mac and fail on the Windows laptop - and the two machines would then
+# disagree about what day it is, making a user's remaining attempts
+# appear to change when they switched computers.
+try:
+    TRYON_RESET_OFFSET_HOURS = float(
+        _get("TRYON_RESET_OFFSET_HOURS", "5.5") or "5.5"
+    )
+except ValueError:
+    TRYON_RESET_OFFSET_HOURS = 5.5
+
+
 def tryon_host_is_url():
     """
     Whether the model is hosted at a plain https address rather than as

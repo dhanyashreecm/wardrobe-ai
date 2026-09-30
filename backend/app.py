@@ -50,6 +50,7 @@ from backend import recommend_service
 from backend import outfit_presentation
 from backend import item_recommender
 from backend import virtual_tryon, tryon_store, tryon_orchestrator
+from backend import tryon_usage
 from backend.outfit_builder import occasion_mode as outfit_builder_mode
 
 import os
@@ -2138,6 +2139,10 @@ def tryon_capability():
         "has_photo": bool(photo),
         "photo_url": (photo or {}).get("image_url"),
         "max_upload_mb": config.TRYON_MAX_UPLOAD_MB,
+        # Today's remaining try-ons for THIS account. The backend is
+        # the only authority on this - the page displays it, it does
+        # not decide it.
+        "usage": tryon_usage.snapshot(current_user_email()),
         # One garment per try-on, or a layered outfit (top + bottom +
         # jacket) built one pass at a time - whichever the provider
         # can actually do.
@@ -2384,7 +2389,7 @@ def _person_photo_bytes(user_email):
         return handle.read()
 
 
-def _run_tryon_job(job_id, user_email, items):
+def _run_tryon_job(job_id, user_email, items, usage_day=None):
     """
     The actual generation, on a background thread.
 
@@ -2399,6 +2404,11 @@ def _run_tryon_job(job_id, user_email, items):
     job stuck in RUNNING forever, so every failure ends in
     mark_failed with a sentence written for the user.
     """
+    # Set only once an image actually exists. Everything else - a
+    # quota refusal, a timeout, a sleeping Space, an unusable photo -
+    # leaves it False and refunds the attempt in the finally below.
+    succeeded = False
+
     try:
         person_bytes = _person_photo_bytes(user_email)
 
@@ -2425,6 +2435,8 @@ def _run_tryon_job(job_id, user_email, items):
 
         tryon_store.mark_done(job_id, user_email, url, details, outcome)
 
+        succeeded = True
+
     except virtual_tryon.PhotoUnsuitable as error:
         tryon_store.mark_failed(job_id, user_email, str(error),
                                 code=virtual_tryon.UNSUPPORTED_INPUT)
@@ -2449,6 +2461,13 @@ def _run_tryon_job(job_id, user_email, items):
             job_id, user_email,
             "Something went wrong generating your try-on. Please try again.",
         )
+
+    finally:
+        # Nobody pays for a try-on that produced no image. Credited to
+        # the day the attempt was TAKEN, so one reserved at 23:59 and
+        # refunded at 00:01 goes back where it came from.
+        if not succeeded:
+            tryon_usage.refund(user_email, usage_day)
 
 
 @app.route("/api/tryon/generate", methods=["POST"])
@@ -2557,6 +2576,22 @@ def start_tryon():
     if engine is None:
         return _no_provider_response()
 
+    # The daily limit is taken HERE: after every validation, so a
+    # rejected request costs nothing, and before the job exists, so
+    # nothing is ever generated without an attempt behind it. The
+    # check and the increment are one atomic database operation (see
+    # tryon_usage.reserve), which is what stops two simultaneous
+    # requests both squeezing past the last remaining attempt.
+    granted, usage = tryon_usage.reserve(user_email)
+
+    if not granted:
+        return jsonify({
+            "success": False,
+            "code": "daily_limit_reached",
+            "message": tryon_usage.limit_message(usage),
+            "usage": usage,
+        }), 429
+
     job_id = tryon_store.create_job(
         user_email,
         [str(item.get("_id")) for item in items],
@@ -2567,7 +2602,7 @@ def start_tryon():
 
     threading.Thread(
         target=_run_tryon_job,
-        args=(job_id, user_email, items),
+        args=(job_id, user_email, items, usage["day"]),
         daemon=True,
         name=f"tryon-{job_id[:8]}",
     ).start()
@@ -2579,6 +2614,7 @@ def start_tryon():
         # Sent up front so the interface can warn that a full outfit
         # takes two generations before the user starts waiting.
         "estimated_seconds": 25 * len(passes),
+        "usage": usage,
         "not_applied": [
             {
                 "item_id": str(entry["item"].get("_id", "")),

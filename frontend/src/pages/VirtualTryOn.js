@@ -207,7 +207,30 @@ function VirtualTryOn() {
   const selectedItems = selected.map((id) => garments.find((g) => g._id === id)).filter(Boolean);
   const serviceUp = capability ? capability.available !== false : false;
   const inputsReady = Boolean(photoUrl) && selected.length > 0 && !busy && !uploading;
-  const canTry = serviceUp && inputsReady;
+  // The backend is the only authority on how many attempts are left;
+  // this just displays what it reported. Nothing here is trusted by
+  // the server - the limit is enforced again on every request.
+  const usage = capability?.usage || null;
+  const attemptsLeft = usage ? usage.remaining : null;
+  const outOfAttempts = usage ? usage.remaining <= 0 : false;
+
+  const resetsAt = usage?.resets_at
+    ? new Date(usage.resets_at).toLocaleString(undefined, {
+        weekday: "short", hour: "numeric", minute: "2-digit",
+      })
+    : null;
+
+  const canTry = serviceUp && inputsReady && !outOfAttempts;
+
+  // A try-on that fails is refunded by the backend, so once a job
+  // reaches a terminal state the page asks for the real figure again
+  // rather than assuming the attempt was spent.
+  const jobStatus = job?.status;
+  useEffect(() => {
+    if (jobStatus === "done" || jobStatus === "failed") {
+      refreshCapability();
+    }
+  }, [jobStatus, refreshCapability]);
 
   // ---------------- photo ----------------
 
@@ -343,6 +366,11 @@ function VirtualTryOn() {
         },
         { headers }
       );
+      // The response carries the count AFTER this attempt, so the
+      // figure on screen drops immediately rather than after a poll.
+      if (res.data.usage) {
+        setCapability((current) => (current ? { ...current, usage: res.data.usage } : current));
+      }
       setBesides(res.data.not_applied || []);
       setJob({ job_id: res.data.job_id, status: "pending", progress: "", step: 0, total_steps: res.data.total_steps });
       poll(res.data.job_id, FIRST_POLL_MS, Date.now());
@@ -352,6 +380,16 @@ function VirtualTryOn() {
       if (err?.response?.status === 503) {
         setCanRetry(true);
         refreshCapability();
+      }
+      // 429 = the day's attempts are gone. Not something to retry, so
+      // no retry button - just the real figure back from the server.
+      if (err?.response?.status === 429) {
+        setCanRetry(false);
+        if (err.response.data?.usage) {
+          setCapability((current) => (
+            current ? { ...current, usage: err.response.data.usage } : current
+          ));
+        }
       }
     } finally {
       submitting.current = false;
@@ -654,9 +692,27 @@ function VirtualTryOn() {
             </p>
           )}
 
+          {usage && (
+            <p className="aw-hint tryon-attempts" aria-live="polite">
+              {attemptsLeft} of {usage.limit} attempts remaining today
+            </p>
+          )}
+
           <button type="button" className="aw-btn tryon-go" onClick={startTryOn} disabled={!canTry}>
             {busy ? "Creating…" : "Try On"}
           </button>
+
+          {outOfAttempts && (
+            <div className="tryon-status tryon-status-unavailable" role="status">
+              <div>
+                <p>
+                  You've reached your daily Virtual Try-On limit of {usage.limit}{" "}
+                  attempts. Your attempts will reset tomorrow.
+                </p>
+                {resetsAt && <p className="aw-hint">Resets {resetsAt}.</p>}
+              </div>
+            </div>
+          )}
           {capability && !serviceUp && (
             <p className="aw-hint">Try On is paused until a try-on service is available.</p>
           )}

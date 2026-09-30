@@ -74,7 +74,28 @@ class FakeCollection:
 
     @staticmethod
     def _match(doc, query):
-        return all(doc.get(k) == v for k, v in query.items())
+        # Exact equality, plus the handful of comparison operators the
+        # daily-limit code relies on. Without $lt the "take an attempt
+        # only if fewer than the limit are used" filter would match
+        # unconditionally, and the test would pass while the real
+        # database refused - the worst kind of green.
+        for key, expected in query.items():
+            actual = doc.get(key)
+            if isinstance(expected, dict):
+                for operator, value in expected.items():
+                    if operator == "$lt" and not (actual is not None and actual < value):
+                        return False
+                    if operator == "$gt" and not (actual is not None and actual > value):
+                        return False
+                    if operator == "$gte" and not (actual is not None and actual >= value):
+                        return False
+                    if operator == "$lte" and not (actual is not None and actual <= value):
+                        return False
+                    if operator == "$ne" and actual == value:
+                        return False
+            elif actual != expected:
+                return False
+        return True
 
     def find_one(self, query):
         for doc in self.docs:
@@ -99,8 +120,43 @@ class FakeCollection:
     def update_one(self, query, update):
         for doc in self.docs:
             if self._match(doc, query):
-                doc.update(copy.deepcopy(update.get("$set", {})))
+                self._apply(doc, update)
                 return
+
+    @staticmethod
+    def _apply(doc, update):
+        doc.update(copy.deepcopy(update.get("$set", {})))
+        for field, amount in (update.get("$inc") or {}).items():
+            doc[field] = doc.get(field, 0) + amount
+
+    def find_one_and_update(self, query, update, upsert=False):
+        """
+        Mongo's atomic check-and-change, as the daily limit uses it.
+
+        The important part is the upsert branch: when the filter does
+        not match because the row EXISTS but fails a condition (ten
+        attempts already used), a real Mongo raises DuplicateKeyError
+        on the _id rather than inserting a second row. Modelling that
+        is what lets the test prove the eleventh request is refused.
+        """
+        for doc in self.docs:
+            if self._match(doc, query):
+                self._apply(doc, update)
+                return copy.deepcopy(doc)
+
+        if not upsert:
+            return None
+
+        identifier = query.get("_id")
+        if identifier is not None and any(d.get("_id") == identifier for d in self.docs):
+            from pymongo.errors import DuplicateKeyError
+            raise DuplicateKeyError("row exists but did not match the filter")
+
+        fresh = {k: v for k, v in query.items() if not isinstance(v, dict)}
+        fresh.update(copy.deepcopy(update.get("$setOnInsert", {})))
+        self._apply(fresh, update)
+        self.docs.append(fresh)
+        return copy.deepcopy(fresh)
 
     def delete_one(self, query):
         for i, doc in enumerate(self.docs):
@@ -216,6 +272,9 @@ class VirtualTryOnApiTests(unittest.TestCase):
         cls.m = app_module
         cls.vt = virtual_tryon
         cls.store = tryon_store
+
+        from backend import tryon_usage
+        cls.usage = tryon_usage
         cls.client = app_module.app.test_client()
         cls.tmp = tempfile.mkdtemp()
 
@@ -228,6 +287,7 @@ class VirtualTryOnApiTests(unittest.TestCase):
 
         self.photos = FakeCollection()
         self.results = FakeCollection()
+        self.usage_rows = FakeCollection()
         self.saved = []
 
         # url -> file on disk, standing in for Cloudinary downloads
@@ -254,6 +314,7 @@ class VirtualTryOnApiTests(unittest.TestCase):
         self.patches = [
             mock.patch.object(self.store, "photos_collection", self.photos),
             mock.patch.object(self.store, "results_collection", self.results),
+            mock.patch.object(self.usage, "usage_collection", self.usage_rows),
             mock.patch.object(m, "get_user_wardrobe",
                               side_effect=lambda email: copy.deepcopy(WARDROBES.get(email, []))),
             mock.patch.object(m, "get_user_gender", side_effect=lambda email: GENDERS.get(email)),
@@ -766,6 +827,79 @@ class VirtualTryOnApiTests(unittest.TestCase):
             res = self._generate(["a_shirt"])
             self.assertEqual(res.status_code, 503)
             self.assertEqual(res.get_json()["code"], "not_configured")
+
+
+    # ---------------- daily limit, as the browser meets it ----------
+    # The counter the page shows, the 429 when it runs out, and what
+    # does and does not cost an attempt. The arithmetic itself is
+    # covered in test_tryon_usage.py; these are about the routes
+    # honouring it.
+
+    def test_capability_reports_the_allowance(self):
+        cap = self.client.get("/api/tryon/capability",
+                              headers=self._headers()).get_json()
+
+        self.assertEqual(cap["usage"]["limit"], 10)
+        self.assertEqual(cap["usage"]["remaining"], 10)
+        self.assertTrue(cap["usage"]["resets_at"])
+
+    def test_a_successful_generation_costs_one_attempt(self):
+        self._upload()
+
+        body = self._generate(["a_shirt"]).get_json()
+
+        self.assertEqual(body["usage"]["remaining"], 9)
+
+        cap = self.client.get("/api/tryon/capability",
+                              headers=self._headers()).get_json()
+        self.assertEqual(cap["usage"]["remaining"], 9)
+
+    def test_the_eleventh_generation_is_refused_with_429(self):
+        self._upload()
+
+        for _ in range(10):
+            self.assertEqual(self._generate(["a_shirt"]).status_code, 202)
+
+        res = self._generate(["a_shirt"])
+        body = res.get_json()
+
+        self.assertEqual(res.status_code, 429)
+        self.assertEqual(body["code"], "daily_limit_reached")
+        self.assertIn("10 attempts", body["message"])
+        self.assertEqual(body["usage"]["remaining"], 0)
+
+    def test_a_refused_request_never_reaches_the_provider(self):
+        self._upload()
+        for _ in range(10):
+            self._generate(["a_shirt"])
+
+        before = len(FakeProvider.calls)
+        self._generate(["a_shirt"])
+
+        self.assertEqual(len(FakeProvider.calls), before)
+
+    def test_another_account_has_its_own_ten(self):
+        self._upload()
+        for _ in range(10):
+            self._generate(["a_shirt"])
+
+        cap = self.client.get("/api/tryon/capability",
+                              headers=self._headers(BOB)).get_json()
+
+        self.assertEqual(cap["usage"]["remaining"], 10)
+
+    def test_a_request_rejected_before_generating_costs_nothing(self):
+        """
+        No photo, no clothes, too many items - none of these reach the
+        model, so none of them should cost an attempt.
+        """
+        self._generate(["a_shirt"])          # refused: no photo yet
+        self._generate([])                   # refused: nothing chosen
+
+        cap = self.client.get("/api/tryon/capability",
+                              headers=self._headers()).get_json()
+
+        self.assertEqual(cap["usage"]["remaining"], 10)
 
 
 
