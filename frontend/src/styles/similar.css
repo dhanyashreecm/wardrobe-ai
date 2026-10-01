@@ -57,7 +57,6 @@
 .sim-section { margin-bottom: 30px; }
 .sim-empty { padding: 26px; color: var(--aw-muted); }
 .sim-grid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
-.sim-grid-small { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
 
 .sim-product { overflow: hidden; display: flex; flex-direction: column; }
 .sim-product-img { position: relative; aspect-ratio: 3 / 4; background: #f3ebe4; overflow: hidden; }
@@ -115,9 +114,6 @@
 .sim-compare-img { width: 90px; aspect-ratio: 3 / 4; overflow: hidden; border-radius: 8px; background: #f3ebe4; margin-bottom: 6px; }
 .sim-compare-img img { width: 100%; height: 100%; object-fit: cover; }
 
-/* ---------- more ideas ---------- */
-.sim-idea { overflow: hidden; text-align: center; padding-bottom: 8px; }
-.sim-idea img { width: 100%; height: 150px; object-fit: cover; display: block; margin-bottom: 6px; }
 
 /* ---------- phones / tablets ---------- */
 @media (max-width: 900px) {

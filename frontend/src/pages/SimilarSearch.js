@@ -153,8 +153,6 @@ function SimilarSearch() {
   const [wardrobeError, setWardrobeError] = useState("");
   const [wardrobeResults, setWardrobeResults] = useState([]);
   const [wardrobeStatus, setWardrobeStatus] = useState("");
-  const [datasetResults, setDatasetResults] = useState([]);
-  const [indofashionResults, setIndofashionResults] = useState([]);
 
   const [analysis, setAnalysis] = useState(EMPTY_ANALYSIS);
 
@@ -252,8 +250,6 @@ function SimilarSearch() {
     setWardrobeState("loading");
     setWardrobeError("");
     setWardrobeResults([]);
-    setDatasetResults([]);
-    setIndofashionResults([]);
     setWardrobeStatus("");
     setShop(null);
     setShopState("idle");
@@ -270,8 +266,6 @@ function SimilarSearch() {
       });
       if (!res.data.success) throw new Error(res.data.message || "Search failed");
       setWardrobeResults(res.data.wardrobe_results || []);
-      setDatasetResults(res.data.dataset_results || []);
-      setIndofashionResults(res.data.indofashion_results || []);
       status = res.data.wardrobe_status || ((res.data.wardrobe_results || []).length ? "similar" : "none");
       setWardrobeStatus(status);
       detected = { ...EMPTY_ANALYSIS, ...(res.data.analysis || {}) };
@@ -794,36 +788,6 @@ function SimilarSearch() {
             )}
           </section>
 
-          {/* ============================================= */}
-          {/* MORE IDEAS - the original dataset results     */}
-          {/* ============================================= */}
-          {wardrobeState === "done" && (datasetResults.length > 0 || indofashionResults.length > 0) && (
-            <section className="sim-section" aria-label="More ideas">
-              <h2 className="sim-h2">✨ More Ideas from the AI Fashion Datasets</h2>
-              <p className="sim-sub">Visually similar clothes found by the AI models (not for sale).</p>
-              <div className="aw-grid sim-grid sim-grid-small">
-                {datasetResults.map((item, idx) => (
-                  <div key={`d${idx}`} className="aw-card sim-idea">
-                    <img
-                      src={`${API_URL}/api/dataset/${item.image.replace(/^dataset\/deepfashion\//, "")}`}
-                      alt="Similar clothing"
-                    />
-                    <span className="sim-muted">{percent(item.similarity)} match</span>
-                  </div>
-                ))}
-                {indofashionResults.map((item, idx) => (
-                  <div key={`i${idx}`} className="aw-card sim-idea">
-                    <img
-                      src={`${API_URL}/api/indofashion/${item.image.replace(/^.*dataset\/indofashion\/processed\//, "")}`}
-                      alt="Similar Indian clothing"
-                      onError={(e) => { e.currentTarget.style.display = "none"; }}
-                    />
-                    <span className="sim-muted">{percent(item.similarity)} match · IndoFashion</span>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
         </div>
       </div>
     </Layout>

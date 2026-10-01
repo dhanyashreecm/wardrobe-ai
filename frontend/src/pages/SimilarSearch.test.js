@@ -217,6 +217,18 @@ test('wishlist save and compare', async () => {
   expect(within(table).getByText('₹899')).toBeInTheDocument();
 });
 
+test('dataset suggestions are not shown, even when the server sends them', async () => {
+  wardrobeReply = () => Promise.resolve({ data: { ...wardrobeResponse('none', []).data,
+    dataset_results: [{ image: 'dataset/deepfashion/a.jpg', similarity: 0.68 }],
+    indofashion_results: [{ image: 'dataset/indofashion/processed/b.jpg', similarity: 0.6 }] } });
+  renderPage();
+  await upload();
+  await screen.findByText('Pink Embroidered Kurta');
+  expect(screen.queryByText(/More Ideas/)).toBeNull();
+  expect(screen.queryByText(/IndoFashion/)).toBeNull();
+  expect(screen.queryByAltText('Similar clothing')).toBeNull();
+});
+
 test('price formatting', () => {
   expect(formatPrice({ price: 1499, currency: 'INR' })).toBe('₹1,499');
   expect(formatPrice({ price: null, price_text: '$20' })).toBe('$20');
