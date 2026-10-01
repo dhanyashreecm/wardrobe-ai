@@ -371,6 +371,88 @@ def check_person_photo(image_bytes):
     return problems
 
 
+def person_photo_advice(image_bytes):
+    """
+    Things worth telling the user about their photo that are NOT
+    reasons to refuse it.
+
+    The distinction matters. check_person_photo above REJECTS - the
+    file is not an image, it is too big, it is a landscape group shot.
+    This one only advises: the photo is dim, or soft. Plenty of
+    perfectly good indoor phone photos are a bit of both, and refusing
+    them would be exactly the kind of "photograph it against a white
+    wall" demand this app is supposed to avoid. But the model will
+    spend a minute of a shared free GPU reproducing whatever it is
+    given, so saying so beforehand is worth a line of text.
+
+    Returns a list of sentences, empty when there is nothing to say.
+    """
+    if not image_bytes:
+        return []
+
+    try:
+        from PIL import Image
+        image = Image.open(io.BytesIO(image_bytes))
+    except Exception:  # noqa: BLE001 - advice may never be the thing that breaks
+        return []
+
+    return _exposure_and_focus_problems(image)
+
+
+# The same thresholds the clothing upload uses (image_pipeline), so a
+# photo judged too dark or too soft in one place is judged the same way
+# in the other.
+MIN_MEAN_BRIGHTNESS = 30
+MIN_SHARPNESS = 12
+
+
+def _exposure_and_focus_problems(image):
+    """
+    Two cheap numbers: mean brightness, and Laplacian variance for
+    focus. Same thresholds as the clothing upload, so the two parts of
+    the app agree about what "dark" and "blurry" mean.
+
+    Deliberately NOT a quality score for the result, and never a reason
+    to refuse a photo - see person_photo_advice.
+    """
+    problems = []
+
+    try:
+        import numpy as np
+    except ImportError:
+        return problems
+
+    try:
+        gray = np.asarray(image.convert("L"), dtype=np.float32)
+    except Exception:  # noqa: BLE001 - a validation check may never crash
+        return problems
+
+    if gray.size == 0:
+        return problems
+
+    if float(gray.mean()) < MIN_MEAN_BRIGHTNESS:
+        problems.append(
+            "The photo is very dark. Stand facing a window or turn a light "
+            "on - the try-on can only be as clear as the photo."
+        )
+
+    try:
+        import cv2
+        side = min(512, gray.shape[1]), min(512, gray.shape[0])
+        small = cv2.resize(gray, side)
+        sharpness = float(cv2.Laplacian(small, cv2.CV_32F).var())
+    except Exception:  # noqa: BLE001 - opencv missing or an odd image
+        return problems
+
+    if sharpness < MIN_SHARPNESS:
+        problems.append(
+            "The photo looks out of focus. A sharper photo gives a much "
+            "better result - hold still, or ask someone to take it."
+        )
+
+    return problems
+
+
 # ============================================================
 # TURNING A SELECTION INTO PASSES
 # ============================================================
@@ -1052,6 +1134,45 @@ class SelfHostedGradioProvider(HuggingFaceSpaceProvider):
         return missing
 
 
+class SecondSelfHostedGradioProvider(SelfHostedGradioProvider):
+    """
+    A second notebook, so Kaggle and Colab can both be running.
+
+    Two notebooks are two separate free GPUs with two separate
+    allowances, which is the only honest way to raise how many try-ons
+    can actually succeed in a day without paying: Kaggle gives about 30
+    GPU-hours a week, Colab an unpredictable few hours a day, and either
+    one falling asleep stops being a total outage when the other is up.
+
+    Identical in every other way - same model, same /try_on contract,
+    same quality. It differs from self_hosted only in which setting
+    holds its address.
+    """
+
+    name = "self_hosted_2"
+    host_setting = "TRYON_FALLBACK_URL_2"
+    free_tier_note = (
+        "Your second free notebook (Kaggle or Colab): free GPU when "
+        "available, session-limited, link changes each run."
+    )
+
+    @property
+    def host(self):
+        return self._host if self._host is not None else (config.TRYON_FALLBACK_URL_2 or "")
+
+    def missing_configuration(self):
+        # HuggingFaceSpaceProvider's version already reports
+        # self.host_setting when the address is blank, and host_setting
+        # above is the right name, so only the "must be a link" check
+        # needs restating with this setting's own name.
+        missing = HuggingFaceSpaceProvider.missing_configuration(self)
+        if self.host and not self.host_is_url():
+            missing.append(
+                "TRYON_FALLBACK_URL_2 (must be the https:// link the notebook prints)"
+            )
+        return missing
+
+
 class FashnSpaceProvider(HuggingFaceSpaceProvider):
     """The official/public FASHN VTON v1.5 Space (or your own copy of it)."""
 
@@ -1062,6 +1183,7 @@ _PROVIDERS = {
     "fashn_space": FashnSpaceProvider,
     "huggingface_space": HuggingFaceSpaceProvider,   # older name, same provider
     "self_hosted": SelfHostedGradioProvider,
+    "self_hosted_2": SecondSelfHostedGradioProvider,
     "none": VirtualTryOnProvider,
 }
 

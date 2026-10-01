@@ -34,6 +34,20 @@ function App() {
         <Route path="/trip" element={<TripPlanner />} />
         <Route path="/profile" element={<Profile />} />
         <Route path="/tryon" element={<VirtualTryOn />} />
+        {/* Anything else. Without this, a mistyped or stale URL renders
+            a blank white page with no explanation and no way back -
+            which is exactly what a visitor sees after a bookmark goes
+            stale. Signed in, the dashboard is the right home; signed
+            out, the login page is. */}
+        <Route
+          path="*"
+          element={
+            <Navigate
+              to={localStorage.getItem("token") ? "/dashboard" : "/login"}
+              replace
+            />
+          }
+        />
       </Routes>
     </BrowserRouter>
   );

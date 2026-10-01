@@ -147,6 +147,30 @@ def ensure_indexes():
                 "partialFilterExpression": {"migrated_from_id": {"$type": "string"}},
             },
         ),
+        # One try-on per browser submission. UNIQUE where a request_id
+        # was sent, so two copies of the SAME submission arriving at the
+        # same instant - two devices, a double-click the disabled button
+        # didn't catch - cannot both create a job. The second insert is
+        # refused by the database rather than by a check that could be
+        # overtaken, and tryon_store answers it with the job that won.
+        # Partial, because jobs started before this existed (and any
+        # request that sends no id) have no request_id and must not all
+        # collide on null.
+        (
+            "tryon_results",
+            [("user_email", 1), ("request_id", 1)],
+            {
+                "name": "user_request_unique",
+                "unique": True,
+                "partialFilterExpression": {"request_id": {"$type": "string"}},
+            },
+        ),
+        # The "is one already running for this account" lookup.
+        (
+            "tryon_results",
+            [("user_email", 1), ("status", 1)],
+            {"name": "user_status_1"},
+        ),
     ]
 
     for collection, keys, options in specs:

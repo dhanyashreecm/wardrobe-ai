@@ -416,3 +416,97 @@ test('recent try-ons are listed and can be reopened, even while providers are un
   fireEvent.click(screen.getByAltText('Office look'));
   expect(await screen.findByTestId('tryon-result')).toBeInTheDocument();
 });
+
+// ---------------------------------------------------------------
+// The daily allowance, as the page reports it. What is on screen has
+// to be exactly what the backend said - a counter that guesses is
+// worse than no counter.
+// ---------------------------------------------------------------
+
+const withUsage = (extra) => ({
+  ...CAPABILITY,
+  photo_url: 'https://res.cloudinary.com/x/me.jpg',
+  has_photo: true,
+  usage: {
+    used: 3, limit: 10, remaining: 7, successful: 3, in_progress: 0,
+    day: '2026-10-01', resets_at: '2026-10-01T18:30:00Z',
+    ...extra,
+  },
+});
+
+test('the counter shows successful generations out of the daily limit', async () => {
+  mockApi({ capability: withUsage() });
+  renderPage();
+  const line = await screen.findByText(/try-ons created today/i);
+  expect(line).toHaveTextContent('3/10');
+  expect(line).toHaveTextContent('7 remaining');
+});
+
+test('a generation still running is shown as in progress, not as an image', async () => {
+  mockApi({ capability: withUsage({ used: 4, remaining: 6, successful: 3, in_progress: 1 }) });
+  renderPage();
+  const line = await screen.findByText(/try-ons created today/i);
+  // Three images exist; the fourth is not one yet.
+  expect(line).toHaveTextContent('3/10');
+  expect(line).toHaveTextContent('1 in progress');
+});
+
+test('using the whole allowance disables Try On and says so', async () => {
+  mockApi({ capability: withUsage({ used: 10, remaining: 0, successful: 10 }) });
+  renderPage();
+  fireEvent.click(await screen.findByRole('button', { name: /white shirt/i }));
+  expect(await screen.findByText(/created all 10 of today's virtual try-ons/i)).toBeInTheDocument();
+  expect(tryOnButton()).toBeDisabled();
+});
+
+test('a failure that cost nothing says so instead of implying the allowance is gone', async () => {
+  mockApi({
+    capability: withUsage(),
+    status: [{
+      job_id: 'jf', status: 'failed', error: 'The try-on service is starting up.',
+      error_code: 'PROVIDER_SLEEPING', attempt_charged: false, outcome: 'confirmed',
+    }],
+  });
+  axios.post.mockResolvedValue({ data: { success: true, job_id: 'jf', total_steps: 1, not_applied: [] } });
+  jest.useFakeTimers();
+  renderPage();
+  fireEvent.click(await screen.findByRole('button', { name: /white shirt/i }));
+  await act(async () => { fireEvent.click(tryOnButton()); });
+  await act(async () => { jest.advanceTimersByTime(2100); });
+  expect(await screen.findByText(/didn't use one of your daily attempts/i)).toBeInTheDocument();
+});
+
+test('an unconfirmed outcome says the attempt is on hold, not spent', async () => {
+  mockApi({
+    capability: withUsage(),
+    status: [{
+      job_id: 'ju', status: 'failed', error: 'The try-on service was too slow to respond.',
+      error_code: 'TIMEOUT', attempt_charged: true, outcome: 'uncertain',
+    }],
+  });
+  axios.post.mockResolvedValue({ data: { success: true, job_id: 'ju', total_steps: 1, not_applied: [] } });
+  jest.useFakeTimers();
+  renderPage();
+  fireEvent.click(await screen.findByRole('button', { name: /white shirt/i }));
+  await act(async () => { fireEvent.click(tryOnButton()); });
+  await act(async () => { jest.advanceTimersByTime(2100); });
+  expect(await screen.findByText(/on hold/i)).toBeInTheDocument();
+});
+
+test('a repeated submission reuses one request id so it cannot be charged twice', async () => {
+  mockApi({
+    capability: withUsage(),
+    status: [{ job_id: 'j1', status: 'running' }],
+  });
+  axios.post.mockResolvedValue({ data: { success: true, job_id: 'j1', total_steps: 1, not_applied: [] } });
+  renderPage();
+  fireEvent.click(await screen.findByRole('button', { name: /white shirt/i }));
+  await act(async () => { fireEvent.click(tryOnButton()); });
+  const body = axios.post.mock.calls[0][1];
+  expect(typeof body.request_id).toBe('string');
+  expect(body.request_id.length).toBeGreaterThan(0);
+  // The button is disabled while it runs, so a second click sends nothing.
+  expect(tryOnButton()).toBeDisabled();
+  await act(async () => { fireEvent.click(tryOnButton()); });
+  expect(axios.post).toHaveBeenCalledTimes(1);
+});

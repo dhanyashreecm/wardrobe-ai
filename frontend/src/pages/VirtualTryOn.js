@@ -93,6 +93,10 @@ function VirtualTryOn() {
   const [localPreview, setLocalPreview] = useState("");
   const [uploading, setUploading] = useState(false);
   const [photoProblems, setPhotoProblems] = useState([]);
+  // Notes about an ACCEPTED photo - dim, slightly soft. Separate from
+  // photoProblems on purpose: these are not reasons the photo was
+  // refused, because it wasn't.
+  const [photoAdvice, setPhotoAdvice] = useState([]);
 
   const [job, setJob] = useState(null);
   const [besides, setBesides] = useState([]);
@@ -108,6 +112,14 @@ function VirtualTryOn() {
   const pollTimer = useRef(null);
   // Set synchronously, so two quick clicks can never start two try-ons.
   const submitting = useRef(false);
+  // The id of the submission in flight. The server stores it against
+  // the job, so if this exact submission reaches it twice - a click
+  // that beat the disabled button, or a retry after the connection
+  // dropped before the answer came back - the second one is answered
+  // with the job already running instead of starting a new generation
+  // and spending a second attempt. Cleared only once the server has
+  // definitely answered, which is what makes the retry safe.
+  const requestId = useRef(null);
   const alive = useRef(true);
 
   useEffect(() => {
@@ -213,6 +225,11 @@ function VirtualTryOn() {
   const usage = capability?.usage || null;
   const attemptsLeft = usage ? usage.remaining : null;
   const outOfAttempts = usage ? usage.remaining <= 0 : false;
+  // What the limit is really counting: images the user can open. A
+  // generation still running is shown separately rather than folded in,
+  // so the headline figure never claims an image that doesn't exist yet.
+  const successful = usage ? usage.successful ?? usage.used : null;
+  const inProgress = usage ? usage.in_progress || 0 : 0;
 
   const resetsAt = usage?.resets_at
     ? new Date(usage.resets_at).toLocaleString(undefined, {
@@ -221,6 +238,25 @@ function VirtualTryOn() {
     : null;
 
   const canTry = serviceUp && inputsReady && !outOfAttempts;
+
+  // What a failure did to the day's allowance, in the user's terms.
+  // The server decides this - a confirmed failure gives the attempt
+  // straight back, an outcome it never learned holds it and returns it
+  // automatically - so the page never has to guess, and never implies
+  // the attempts are gone when they aren't.
+  const allowanceNote = (() => {
+    if (job?.status !== "failed") return "";
+    if (job.attempt_charged === false) {
+      return "This didn't use one of your daily attempts.";
+    }
+    if (job.outcome === "uncertain") {
+      return (
+        "We couldn't confirm whether the image was created, so this " +
+        "attempt is on hold. It goes back automatically if nothing arrives."
+      );
+    }
+    return "";
+  })();
 
   // A try-on that fails is refunded by the backend, so once a job
   // reaches a terminal state the page asks for the real figure again
@@ -264,6 +300,7 @@ function VirtualTryOn() {
       const res = await axios.post(`${API_URL}/api/tryon/photo`, form, { headers });
       if (!alive.current) return;
       setPhotoUrl(res.data.photo_url);
+      setPhotoAdvice(res.data.advice || []);
       setJob(null);
     } catch (err) {
       if (!alive.current) return;
@@ -291,6 +328,11 @@ function VirtualTryOn() {
   };
 
   // ---------------- generation ----------------
+
+  const newRequestId = () => {
+    if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  };
 
   const poll = useCallback((jobId, delay, startedAt) => {
     pollTimer.current = setTimeout(async () => {
@@ -355,6 +397,10 @@ function VirtualTryOn() {
       return item && item.tryon.shown_beside;
     });
 
+    // Reused if a previous attempt at this same submission never got an
+    // answer, so the server recognises it as the same request.
+    if (!requestId.current) requestId.current = newRequestId();
+
     try {
       const res = await axios.post(
         `${API_URL}/api/tryon/generate`,
@@ -363,6 +409,7 @@ function VirtualTryOn() {
           source: incoming.source || "manual",
           occasion: incoming.occasion || "",
           label: incoming.label || "",
+          request_id: requestId.current,
         },
         { headers }
       );
@@ -373,24 +420,52 @@ function VirtualTryOn() {
       }
       setBesides(res.data.not_applied || []);
       setJob({ job_id: res.data.job_id, status: "pending", progress: "", step: 0, total_steps: res.data.total_steps });
+      // The server answered, so this submission is settled either way:
+      // a replay was recognised rather than charged, and the next click
+      // is a genuinely new try-on that deserves its own id.
+      requestId.current = null;
       poll(res.data.job_id, FIRST_POLL_MS, Date.now());
     } catch (err) {
       setBusy(false);
+      const status = err?.response?.status;
+
+      // Any answer from the server - even a refusal - settles this
+      // submission. Only a request that never arrived keeps its id, so
+      // that trying again is recognised as the same one.
+      if (status) requestId.current = null;
+
       setError(friendlyError(err, "Couldn't start the try-on. Please try again."));
-      if (err?.response?.status === 503) {
+
+      if (err.response?.data?.usage) {
+        setCapability((current) => (
+          current ? { ...current, usage: err.response.data.usage } : current
+        ));
+      }
+
+      if (status === 503) {
         setCanRetry(true);
         refreshCapability();
       }
+
+      // 409 = this account already has one running, started in another
+      // tab or on the other computer. Nothing was charged; follow the
+      // job that exists rather than asking for another.
+      if (status === 409 && err.response.data?.job_id) {
+        setCanRetry(false);
+        setBusy(true);
+        setJob({
+          job_id: err.response.data.job_id,
+          status: "running",
+          progress: "",
+          step: 0,
+          total_steps: 0,
+        });
+        poll(err.response.data.job_id, FIRST_POLL_MS, Date.now());
+      }
+
       // 429 = the day's attempts are gone. Not something to retry, so
       // no retry button - just the real figure back from the server.
-      if (err?.response?.status === 429) {
-        setCanRetry(false);
-        if (err.response.data?.usage) {
-          setCapability((current) => (
-            current ? { ...current, usage: err.response.data.usage } : current
-          ));
-        }
-      }
+      if (status === 429) setCanRetry(false);
     } finally {
       submitting.current = false;
     }
@@ -543,6 +618,9 @@ function VirtualTryOn() {
           {capability && !capability.available && capability.message && error.startsWith(capability.message)
             ? "Your last try-on couldn't be completed."
             : error}
+          {allowanceNote && (
+            <p className="aw-hint tryon-allowance-note">{allowanceNote}</p>
+          )}
           {canRetry && (
             <button
               type="button"
@@ -596,6 +674,14 @@ function VirtualTryOn() {
             <div className="aw-alert" role="alert">
               <strong>That photo won't work:</strong>
               <ul>{photoProblems.map((p) => <li key={p}>{p}</li>)}</ul>
+            </div>
+          )}
+
+          {photoProblems.length === 0 && photoAdvice.length > 0 && (
+            <div className="aw-note" role="status">
+              <strong>Your photo is saved.</strong> One thing that would
+              improve the result:
+              <ul>{photoAdvice.map((note) => <li key={note}>{note}</li>)}</ul>
             </div>
           )}
 
@@ -694,7 +780,14 @@ function VirtualTryOn() {
 
           {usage && (
             <p className="aw-hint tryon-attempts" aria-live="polite">
-              {attemptsLeft} of {usage.limit} attempts remaining today
+              <strong>
+                {successful}/{usage.limit}
+              </strong>{" "}
+              try-ons created today · {attemptsLeft} remaining
+              {inProgress > 0
+                ? ` · ${inProgress} in progress`
+                : ""}
+              {resetsAt ? ` · resets ${resetsAt}` : ""}
             </p>
           )}
 
@@ -706,15 +799,30 @@ function VirtualTryOn() {
             <div className="tryon-status tryon-status-unavailable" role="status">
               <div>
                 <p>
-                  You've reached your daily Virtual Try-On limit of {usage.limit}{" "}
-                  attempts. Your attempts will reset tomorrow.
+                  You've created all {usage.limit} of today's virtual try-ons.
+                  Your allowance resets at the start of the next day.
                 </p>
                 {resetsAt && <p className="aw-hint">Resets {resetsAt}.</p>}
               </div>
             </div>
           )}
-          {capability && !serviceUp && (
-            <p className="aw-hint">Try On is paused until a try-on service is available.</p>
+          {capability && !serviceUp && !outOfAttempts && (
+            // The banner at the top of the page already explains that
+            // the service is down. What it must not leave ambiguous is
+            // whose limit was reached: the day's ten attempts and the
+            // try-on service's own availability are different things,
+            // and somebody with seven attempts left must never be left
+            // thinking they have none.
+            <p className="aw-hint">
+              Try On is paused until a try-on service is available.
+              {usage && usage.remaining > 0
+                ? ` Your ${usage.remaining} ${
+                    usage.remaining === 1 ? "attempt" : "attempts"
+                  } for today ${
+                    usage.remaining === 1 ? "is" : "are"
+                  } untouched - this is the service, not your daily allowance.`
+                : ""}
+            </p>
           )}
 
           {busy && (

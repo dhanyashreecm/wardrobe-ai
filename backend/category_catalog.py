@@ -318,8 +318,28 @@ CLASSIFIER_FAMILIES = {
     "Dhoti Pants": ["Dhoti Pants", "Pajama"],
     "Dupatta": ["Dupatta", "Saree"],
     "Skirt": ["Skirt", "Lehenga"],
+    # Confusions the model makes CONFIDENTLY, which is the dangerous
+    # kind. The IndoFashion training set has no crop tops, so a crop
+    # top lands on "Blouse" at 0.88 and used to be applied without a
+    # murmur; a draped saree and a lehenga skirt photograph almost
+    # identically when both are laid flat. In each case the right
+    # answer is to offer the real alternatives, not to guess.
+    "Blouse": ["Blouse", "Crop Top", "Top"],
+    "Saree": ["Saree", "Lehenga", "Dupatta"],
+    "Lehenga": ["Lehenga", "Saree", "Skirt"],
+    # Not a stored category (see family() below): offer what the photo
+    # most likely actually is.
+    "Petticoat": ["Skirt", "Lehenga"],
 }
-WEAK_CLASSES = {"Dress", "Gown", "Kurta (Women)", "Dhoti Pants", "Dupatta", "Skirt"}
+
+# Classes the model may NOT decide on its own, whatever its confidence.
+# Two reasons a class lands here: its test F1 was below 0.78, or - for
+# the last three - it is confidently confused with a garment the
+# training set never contained.
+WEAK_CLASSES = {
+    "Dress", "Gown", "Kurta (Women)", "Dhoti Pants", "Dupatta", "Skirt",
+    "Blouse", "Saree", "Lehenga",
+}
 
 
 def classifier_decision(prediction, gender, threshold):
@@ -334,7 +354,14 @@ def classifier_decision(prediction, gender, threshold):
 
     def family(label):
         options = [v for v in CLASSIFIER_FAMILIES.get(label, [canonical(label) or label]) if v in allowed]
-        if label == "Petticoat" and g == FEMALE:
+        # "Petticoat" is an IndoFashion class, not a category this app
+        # stores - a petticoat is underwear and nobody puts one in a
+        # wardrobe app. The old special case here forced it through
+        # anyway, so a skirt the model called a petticoat was offered a
+        # category that does not exist, and an item saved with it fell
+        # out of every recommendation afterwards. Honour it only if it
+        # really is a category for this account.
+        if label == "Petticoat" and g == FEMALE and "Petticoat" in allowed:
             options = ["Petticoat"]
         return options
 

@@ -38,7 +38,17 @@ certifi
 # Space because it needs a GPU. See backend/virtual_tryon.py.
 gradio_client
 
-# Optional - better automatic background removal (local, open-source,
-# free). Without it the app uses OpenCV GrabCut, which is built in.
-# The first upload after installing downloads a ~170 MB model once.
-#   pip install "rembg[cpu]"
+# Optional, but MEASURABLY worth it - better automatic background
+# removal (local, open-source, free, no account, no API).
+#
+# Measured on the 14-case benchmark in backend/tests/segmentation_bench:
+#   without rembg  mean IoU 0.949, worst case 0.724
+#   with rembg     mean IoU 0.970, worst case 0.831
+# and it is the difference between a white t-shirt on white bedding
+# being cut out properly (0.997) and being salvaged by a fallback
+# (0.724). Everything still works without it.
+#
+# The first upload after installing downloads a ~170 MB model once;
+# after that a cut-out takes about 1.5 s on a laptop CPU.
+#   pip install rembg onnxruntime
+# (on some versions:  pip install "rembg[cpu]")

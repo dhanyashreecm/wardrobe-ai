@@ -15,6 +15,7 @@ Run on the Mac:
     python -m unittest backend.tests.test_virtual_tryon -v
 """
 import copy
+from datetime import datetime, timedelta
 import io
 import json
 import os
@@ -68,6 +69,14 @@ class _Cursor(list):
         return _Cursor(self[:count])
 
 
+class _Result:
+    """What pymongo's update_one returns - the release path reads it."""
+
+    def __init__(self, modified):
+        self.modified_count = modified
+        self.matched_count = modified
+
+
 class FakeCollection:
     def __init__(self):
         self.docs = []
@@ -80,6 +89,19 @@ class FakeCollection:
         # unconditionally, and the test would pass while the real
         # database refused - the worst kind of green.
         for key, expected in query.items():
+            if "." in key:
+                # "holds.job_id" - Mongo matches if ANY element of the
+                # array has that value. The hold bookkeeping depends on
+                # it, so the fake has to behave the same way.
+                field, _, member = key.partition(".")
+                values = [
+                    entry.get(member)
+                    for entry in (doc.get(field) or [])
+                    if isinstance(entry, dict)
+                ]
+                if expected not in values:
+                    return False
+                continue
             actual = doc.get(key)
             if isinstance(expected, dict):
                 for operator, value in expected.items():
@@ -92,6 +114,8 @@ class FakeCollection:
                     if operator == "$lte" and not (actual is not None and actual <= value):
                         return False
                     if operator == "$ne" and actual == value:
+                        return False
+                    if operator == "$in" and actual not in value:
                         return False
             elif actual != expected:
                 return False
@@ -121,13 +145,21 @@ class FakeCollection:
         for doc in self.docs:
             if self._match(doc, query):
                 self._apply(doc, update)
-                return
+                return _Result(1)
+        return _Result(0)
 
     @staticmethod
     def _apply(doc, update):
         doc.update(copy.deepcopy(update.get("$set", {})))
         for field, amount in (update.get("$inc") or {}).items():
             doc[field] = doc.get(field, 0) + amount
+        for field, value in (update.get("$push") or {}).items():
+            doc.setdefault(field, []).append(copy.deepcopy(value))
+        for field, condition in (update.get("$pull") or {}).items():
+            doc[field] = [
+                entry for entry in (doc.get(field) or [])
+                if not all(entry.get(k) == v for k, v in condition.items())
+            ]
 
     def find_one_and_update(self, query, update, upsert=False):
         """
@@ -900,6 +932,371 @@ class VirtualTryOnApiTests(unittest.TestCase):
                               headers=self._headers()).get_json()
 
         self.assertEqual(cap["usage"]["remaining"], 10)
+
+    # ------- not spending the provider's allowance by accident -------
+
+    def _remaining(self, email=ALICE):
+        cap = self.client.get("/api/tryon/capability",
+                              headers=self._headers(email)).get_json()
+        return cap["usage"]["remaining"]
+
+    def test_the_same_request_id_twice_makes_one_try_on(self):
+        """
+        A double-click that outran the disabled button, or a retry after
+        the connection dropped mid-request, must not buy two
+        generations. The second arrival gets the job the first started.
+        """
+        self._upload()
+
+        first = self._generate(["a_shirt"], request_id="click-1").get_json()
+        calls_after_first = len(FakeProvider.calls)
+
+        second = self._generate(["a_shirt"], request_id="click-1")
+        body = second.get_json()
+
+        self.assertEqual(second.status_code, 202)
+        self.assertEqual(body["job_id"], first["job_id"])
+        self.assertTrue(body.get("replayed"))
+        # Nothing was generated a second time, and nothing was charged.
+        self.assertEqual(len(FakeProvider.calls), calls_after_first)
+        self.assertEqual(self._remaining(), 9)
+
+    def test_a_different_request_id_is_a_new_try_on(self):
+        """The guard must not make the second genuine try-on impossible."""
+        self._upload()
+
+        first = self._generate(["a_shirt"], request_id="click-1").get_json()
+        second = self._generate(["a_shirt"], request_id="click-2").get_json()
+
+        self.assertNotEqual(first["job_id"], second["job_id"])
+        self.assertEqual(self._remaining(), 8)
+
+    def test_one_account_cannot_run_two_try_ons_at_once(self):
+        """
+        A second tab, or the other laptop, while one is still running.
+        Refused without charging, and told which job to follow - two at
+        once would spend two attempts and two runs of a shared GPU on
+        one person.
+        """
+        self._upload()
+
+        self.results.insert_one({
+            "job_id": "already-running", "user_email": ALICE,
+            "status": self.store.RUNNING, "created_at": datetime.utcnow(),
+            "item_ids": ["a_shirt"], "attempt_charged": True,
+        })
+
+        before = len(FakeProvider.calls)
+        res = self._generate(["a_shirt"])
+        body = res.get_json()
+
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(body["code"], "generation_in_progress")
+        self.assertEqual(body["job_id"], "already-running")
+        self.assertEqual(len(FakeProvider.calls), before)
+        self.assertEqual(self._remaining(), 10)
+
+    def test_a_finished_job_does_not_block_the_next_one(self):
+        self._upload()
+        self.assertEqual(self._generate(["a_shirt"]).status_code, 202)
+        self.assertEqual(self._generate(["a_shirt"]).status_code, 202)
+
+    def test_an_unavailable_provider_does_not_consume_an_attempt(self):
+        """A confirmed provider failure is given straight back."""
+        self._upload()
+        FakeProvider.behaviour = "fail"
+        FakeProvider.failure = RuntimeError("GPU quota exceeded")
+
+        job_id = self._generate(["a_shirt"]).get_json()["job_id"]
+        job = self._status(job_id).get_json()["job"]
+
+        self.assertEqual(job["status"], "failed")
+        self.assertFalse(job["attempt_charged"])
+        self.assertEqual(job["outcome"], "confirmed")
+        self.assertEqual(self._remaining(), 10)
+
+    def test_a_provider_limit_is_never_reported_as_the_daily_limit(self):
+        """
+        The two restrictions are different things. Somebody with ten
+        attempts left must not be told they have none because the free
+        GPU allowance ran out.
+        """
+        self._upload()
+        FakeProvider.behaviour = "fail"
+        FakeProvider.failure = RuntimeError("GPU quota exceeded")
+
+        job_id = self._generate(["a_shirt"]).get_json()["job_id"]
+        job = self._status(job_id).get_json()["job"]
+
+        self.assertEqual(job["error_code"], self.vt.QUOTA_EXHAUSTED)
+        self.assertNotIn("daily Virtual Try-On limit", job["error"])
+        self.assertEqual(self._remaining(), 10)
+
+    def test_an_uncertain_outcome_holds_the_attempt_instead_of_refunding(self):
+        """
+        A timeout does not prove the model stopped working, so the
+        attempt is held rather than handed back at once - otherwise a
+        slow-but-finished generation would be free.
+        """
+        self._upload()
+        FakeProvider.behaviour = "hang"
+        clock = iter(range(0, 10000, 100))
+
+        with mock.patch.object(self.vt, "_now", lambda: next(clock)), \
+             mock.patch.object(self.m.config, "TRYON_TIMEOUT_SECONDS", 150):
+            job_id = self._generate(["a_shirt"]).get_json()["job_id"]
+
+        job = self._status(job_id).get_json()["job"]
+
+        self.assertEqual(job["status"], "failed")
+        self.assertEqual(job["outcome"], "uncertain")
+        self.assertTrue(job["attempt_charged"])
+        self.assertEqual(self._remaining(), 9)
+
+    def test_a_held_attempt_is_given_back_once_the_hold_expires(self):
+        """
+        Held, not lost. Once the hold is older than any generation could
+        possibly be, the answer is in - nothing arrived - and the
+        attempt returns on the next ordinary read of the allowance. No
+        provider call is involved.
+        """
+        self._upload()
+        FakeProvider.behaviour = "hang"
+        clock = iter(range(0, 10000, 100))
+
+        with mock.patch.object(self.vt, "_now", lambda: next(clock)), \
+             mock.patch.object(self.m.config, "TRYON_TIMEOUT_SECONDS", 150):
+            self._generate(["a_shirt"])
+
+        self.assertEqual(self._remaining(), 9)
+
+        # Age the hold past the window, exactly as the clock would.
+        row = self.usage_rows.docs[0]
+        row["holds"][0]["at"] = datetime.utcnow() - timedelta(hours=2)
+
+        before = len(FakeProvider.calls)
+
+        self.assertEqual(self._remaining(), 10)
+        self.assertEqual(len(FakeProvider.calls), before)
+
+    def test_an_interrupted_generation_does_not_lock_an_attempt_for_ever(self):
+        """
+        The backend killed mid-generation: the thread that would have
+        settled or released the attempt is gone. The hold it left behind
+        has to expire by itself.
+        """
+        granted, usage = self.usage.reserve(ALICE, hold_id="job-killed-by-restart")
+
+        self.assertTrue(granted)
+        self.assertEqual(usage["remaining"], 9)
+
+        self.usage_rows.docs[0]["holds"][0]["at"] = (
+            datetime.utcnow() - timedelta(hours=2)
+        )
+
+        self.assertEqual(self._remaining(), 10)
+
+    def test_reading_the_allowance_never_generates_anything(self):
+        self._upload()
+        before = len(FakeProvider.calls)
+
+        for _ in range(5):
+            self._remaining()
+
+        self.assertEqual(len(FakeProvider.calls), before)
+        self.assertEqual(self._remaining(), 10)
+
+    def test_a_failed_try_on_leaves_earlier_results_alone(self):
+        """Existing history and its images survive a later failure."""
+        self._upload()
+        good = self._generate(["a_shirt"]).get_json()["job_id"]
+
+        FakeProvider.behaviour = "fail"
+        FakeProvider.failure = RuntimeError("GPU quota exceeded")
+        self._generate(["a_shirt"])
+
+        listed = self.client.get("/api/tryon/results",
+                                 headers=self._headers()).get_json()["results"]
+
+        self.assertIn(good, [job["job_id"] for job in listed])
+        self.assertTrue(all(job["image_url"] for job in listed))
+
+    def test_two_identical_submissions_at_the_same_instant_make_one_job(self):
+        """
+        The last window a check-then-insert leaves open: two copies of
+        one submission arriving so close together that neither sees the
+        other's job yet. The unique index on (user_email, request_id)
+        refuses the second insert, and the attempt it had reserved is
+        given straight back - one job, one attempt, one generation.
+        """
+        from pymongo.errors import DuplicateKeyError
+
+        self._upload()
+
+        # The request that won, a fraction of a second earlier.
+        self.results.insert_one({
+            "job_id": "the-winner", "user_email": ALICE,
+            "request_id": "same-click", "status": self.store.DONE,
+            "created_at": datetime.utcnow(), "item_ids": ["a_shirt"],
+            "image_url": "https://res.cloudinary.com/demo/won.png",
+            "attempt_charged": True,
+        })
+
+        real_find = self.store.find_by_request_id
+        seen = {"n": 0}
+
+        def not_visible_yet(user_email, request_id):
+            seen["n"] += 1
+            if seen["n"] == 1:
+                return None          # the route looks, and sees nothing
+            return real_find(user_email, request_id)
+
+        before = len(FakeProvider.calls)
+
+        with mock.patch.object(self.store, "find_by_request_id", not_visible_yet), \
+             mock.patch.object(self.results, "insert_one",
+                               side_effect=DuplicateKeyError("request_id")):
+            res = self._generate(["a_shirt"], request_id="same-click")
+
+        body = res.get_json()
+
+        self.assertEqual(res.status_code, 202)
+        self.assertEqual(body["job_id"], "the-winner")
+        self.assertTrue(body["replayed"])
+        # Nothing generated, and the attempt it had taken came back.
+        self.assertEqual(len(FakeProvider.calls), before)
+        self.assertEqual(self._remaining(), 10)
+
+    # ------- the counter counts IMAGES, not requests -------
+
+    def test_ten_successful_generations_then_the_eleventh_is_blocked(self):
+        """
+        The requirement in full: ten try-ons that each produced a real,
+        viewable image, and then no more until the day resets.
+        """
+        self._upload()
+
+        job_ids = []
+        for _ in range(10):
+            res = self._generate(["a_shirt"])
+            self.assertEqual(res.status_code, 202)
+            job_ids.append(res.get_json()["job_id"])
+
+        # Every one of the ten produced an image the user can open.
+        for job_id in job_ids:
+            job = self._status(job_id).get_json()["job"]
+            self.assertEqual(job["status"], "done")
+            self.assertTrue(job["image_url"])
+            self.assertTrue(job["attempt_charged"])
+
+        cap = self.client.get("/api/tryon/capability",
+                              headers=self._headers()).get_json()
+
+        self.assertEqual(cap["usage"]["successful"], 10)
+        self.assertEqual(cap["usage"]["remaining"], 0)
+        self.assertEqual(cap["usage"]["in_progress"], 0)
+        self.assertEqual(self._generate(["a_shirt"]).status_code, 429)
+
+    def test_the_counter_matches_the_images_the_user_can_actually_open(self):
+        """
+        What the page displays has to equal what the history holds -
+        otherwise "7 remaining" is a guess. Three successes and two
+        confirmed failures must read as three.
+        """
+        self._upload()
+
+        for _ in range(3):
+            self._generate(["a_shirt"])
+
+        FakeProvider.behaviour = "fail"
+        FakeProvider.failure = RuntimeError("GPU quota exceeded")
+        for _ in range(2):
+            from backend import tryon_orchestrator
+            tryon_orchestrator.health.reset()
+            self._generate(["a_shirt"])
+
+        cap = self.client.get("/api/tryon/capability",
+                              headers=self._headers()).get_json()
+        listed = self.client.get("/api/tryon/results",
+                                 headers=self._headers()).get_json()["results"]
+
+        viewable = [job for job in listed if job["image_url"]]
+
+        self.assertEqual(cap["usage"]["successful"], 3)
+        self.assertEqual(len(viewable), 3)
+        self.assertEqual(cap["usage"]["remaining"], 7)
+
+    def test_a_generation_in_flight_is_shown_separately_from_the_total(self):
+        """
+        An attempt that is still running is not an image yet. It counts
+        against the allowance (so it cannot be handed out twice) but is
+        reported as in progress, not as something the user can open.
+        """
+        granted, _ = self.usage.reserve(ALICE, hold_id="still-running")
+        self.assertTrue(granted)
+
+        cap = self.client.get("/api/tryon/capability",
+                              headers=self._headers()).get_json()
+
+        self.assertEqual(cap["usage"]["successful"], 0)
+        self.assertEqual(cap["usage"]["in_progress"], 1)
+        self.assertEqual(cap["usage"]["remaining"], 9)
+
+    def test_the_second_self_hosted_notebook_is_used_as_a_fallback(self):
+        """
+        Two free notebooks are two separate free GPUs. When the first
+        provider is out of allowance the second must take the SAME
+        request, with the same inputs, and the user must not be charged
+        twice for one image.
+        """
+        self._upload()
+
+        second = self._second_provider("succeed")
+        FakeProvider.behaviour = "fail"
+        FakeProvider.failure = RuntimeError("GPU quota exceeded")
+
+        with mock.patch.object(self.m.config, "TRYON_PROVIDERS", "fake,fake_b"):
+            job_id = self._generate(["a_shirt"]).get_json()["job_id"]
+
+        job = self._status(job_id).get_json()["job"]
+
+        self.assertEqual(job["status"], "done")
+        self.assertTrue(job["image_url"])
+        self.assertEqual(second.b_calls, ["tops"])
+        # One image, one attempt - the failover did not cost two.
+        self.assertEqual(self._remaining(), 9)
+
+    def test_a_second_notebook_setting_is_a_real_provider(self):
+        """self_hosted_2 must be registered, or the setting does nothing."""
+        self.assertIn("self_hosted_2", self.vt._PROVIDERS)
+
+        engine = self.vt._PROVIDERS["self_hosted_2"]()
+
+        self.assertEqual(engine.name, "self_hosted_2")
+        self.assertIn("TRYON_FALLBACK_URL_2", engine.missing_configuration())
+        # Same model contract as the first notebook - not a lesser one.
+        self.assertEqual(
+            engine.supported_model_categories,
+            self.vt._PROVIDERS["self_hosted"]().supported_model_categories,
+        )
+
+    def test_a_malformed_request_id_is_refused_and_costs_nothing(self):
+        self._upload()
+        res = self._generate(["a_shirt"], request_id={"not": "a string"})
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(self._remaining(), 10)
+
+    def test_one_accounts_request_id_cannot_reach_anothers_job(self):
+        self._upload()
+        self._upload(email=BOB)
+        mine = self._generate(["a_shirt"], request_id="shared-id").get_json()
+
+        theirs = self._generate(["b_shirt"], email=BOB,
+                                request_id="shared-id").get_json()
+
+        self.assertNotEqual(mine["job_id"], theirs["job_id"])
+        self.assertFalse(theirs.get("replayed"))
 
 
 

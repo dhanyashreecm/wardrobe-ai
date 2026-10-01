@@ -44,6 +44,32 @@ FAILOVER_STATES = {
     vt.TEMPORARILY_UNAVAILABLE, vt.TIMEOUT, vt.AUTH_ERROR, vt.CONFIGURATION_ERROR,
 }
 
+# WHAT THE SERVER ACTUALLY LEARNED, which decides whether the user's
+# daily attempt is given back at once or held for a while.
+#
+# CONFIRMED means no image was produced and none ever will be: the
+# allowance was refused, the queue turned us away, the Space is asleep
+# or unreachable, the credentials were rejected, the settings are
+# wrong, or the input cannot be used. Nothing is running anywhere, so
+# the attempt goes straight back.
+CONFIRMED_FAILURE_STATES = {
+    vt.QUOTA_EXHAUSTED, vt.RATE_LIMITED, vt.QUEUE_FULL, vt.PROVIDER_SLEEPING,
+    vt.TEMPORARILY_UNAVAILABLE, vt.AUTH_ERROR, vt.CONFIGURATION_ERROR,
+    vt.UNSUPPORTED_INPUT,
+}
+
+# UNCERTAIN means we stopped waiting, not that the model stopped
+# working. A timeout or a lost connection leaves a generation that may
+# still finish at the provider's end, so the attempt is held rather
+# than refunded - see tryon_usage for how it expires.
+UNCERTAIN_STATES = {vt.TIMEOUT, vt.UNKNOWN_ERROR}
+
+
+def is_confirmed_failure(state):
+    """True when the failure definitely produced nothing."""
+    return state in CONFIRMED_FAILURE_STATES
+
+
 # How long a provider is skipped after each kind of failure, unless the
 # provider itself said how long ("retry in 3:12:00"). ZeroGPU's daily
 # allowance resets 24 h after first use, which the server cannot see,

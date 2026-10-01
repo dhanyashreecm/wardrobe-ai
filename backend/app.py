@@ -32,9 +32,47 @@ from backend.category_gender import is_allowed_for_account
 from backend import category_catalog
 from backend import inspiration as inspiration_library
 from backend.garment_taxonomy import model_may_override
-from backend.clothing_similarity import find_similar
-from backend.indofashion_similarity import find_similar_indofashion
-from backend.indofashion_classifier import predict_category
+# TensorFlow powers ONE feature - "find similar clothes" - and it is by
+# far the heaviest and most fragile dependency in the project: a 280 MB
+# wheel that does not build on every machine or Python version. Importing
+# it at module level meant a laptop without it could not start the
+# backend AT ALL: no login, no wardrobe, no uploads, no recommendations,
+# no try-on, just a traceback. That is the wrong failure.
+#
+# So the import is guarded. With TensorFlow present nothing changes.
+# Without it, everything else runs and /api/ai/similar alone reports
+# that the feature is unavailable on this machine.
+try:
+    from backend.clothing_similarity import find_similar
+    from backend.indofashion_similarity import find_similar_indofashion
+    SIMILARITY_AVAILABLE = True
+    SIMILARITY_UNAVAILABLE_REASON = ""
+except Exception as _similarity_import_error:  # noqa: BLE001
+    find_similar = None
+    find_similar_indofashion = None
+    SIMILARITY_AVAILABLE = False
+    SIMILARITY_UNAVAILABLE_REASON = type(_similarity_import_error).__name__
+    print(
+        "Similar-clothes search is OFF on this machine "
+        f"({SIMILARITY_UNAVAILABLE_REASON}: TensorFlow could not be "
+        "imported). Everything else works. To enable it: "
+        "pip install tensorflow"
+    )
+# Also TensorFlow-backed - see the note on the similarity imports above.
+# Every call site already sits inside a try/except (the classifier is a
+# suggestion, never a requirement), so a stand-in that raises keeps the
+# behaviour on a machine without TensorFlow identical to the behaviour
+# when the model file is missing: the user picks the category themselves.
+try:
+    from backend.indofashion_classifier import predict_category
+except Exception as _classifier_import_error:  # noqa: BLE001
+    _classifier_reason = type(_classifier_import_error).__name__
+
+    def predict_category(*_args, **_kwargs):
+        raise RuntimeError(
+            "The IndoFashion classifier needs TensorFlow, which is not "
+            f"installed on this computer ({_classifier_reason})."
+        )
 from backend.weather import get_weather, get_weather_forecast
 from backend.trip_planner import plan_trip
 from backend.trips import save_trip, get_user_trips, delete_all_for_user as delete_all_trips_for_user
@@ -1285,6 +1323,15 @@ def update_wardrobe_item(item_id):
 @jwt_required()
 def find_similar_clothes():
 
+    if not SIMILARITY_AVAILABLE:
+        return jsonify({
+            "success": False,
+            "code": "similarity_unavailable",
+            "message":
+                "Similar-clothes search isn't available on this computer. "
+                "Everything else in your wardrobe still works.",
+        }), 503
+
     from backend.clothing_similarity import (
         find_similar_in_wardrobe
     )
@@ -2106,6 +2153,20 @@ def outfit_history():
 # guessing an id.
 # =========================================================
 
+def _tryon_usage_now(user_email):
+    """
+    The allowance as the page should show it, after giving back any
+    attempt whose outcome never arrived and whose hold has expired.
+
+    Reading the allowance never generates anything and never calls the
+    provider - it is two small database operations - so the page can
+    refresh the figure as often as it likes.
+    """
+    tryon_usage.release_stale_holds(user_email)
+
+    return tryon_usage.snapshot(user_email)
+
+
 @app.route("/api/tryon/capability", methods=["GET"])
 @jwt_required()
 def tryon_capability():
@@ -2142,7 +2203,7 @@ def tryon_capability():
         # Today's remaining try-ons for THIS account. The backend is
         # the only authority on this - the page displays it, it does
         # not decide it.
-        "usage": tryon_usage.snapshot(current_user_email()),
+        "usage": _tryon_usage_now(current_user_email()),
         # One garment per try-on, or a layered outfit (top + bottom +
         # jacket) built one pass at a time - whichever the provider
         # can actually do.
@@ -2279,6 +2340,11 @@ def upload_tryon_photo():
     # reaches the database or costs an upload.
     problems = virtual_tryon.check_person_photo(image_bytes)
 
+    # Advice, not grounds for refusal: a dim or slightly soft photo is
+    # still a usable photo, and refusing it would be the "photograph
+    # yourself against a white wall" demand this app exists to avoid.
+    advice = virtual_tryon.person_photo_advice(image_bytes)
+
     if problems:
         return jsonify({
             "success": False,
@@ -2322,7 +2388,13 @@ def upload_tryon_photo():
     if previous and _is_different_image(previous, details, url):
         storage.delete_image(previous)
 
-    return jsonify({"success": True, "photo_url": url}), 200
+    return jsonify({
+        "success": True,
+        "photo_url": url,
+        # Shown beside the photo, not as an error - the photo was
+        # accepted either way.
+        "advice": advice,
+    }), 200
 
 
 @app.route("/api/tryon/photo", methods=["DELETE"])
@@ -2404,10 +2476,16 @@ def _run_tryon_job(job_id, user_email, items, usage_day=None):
     job stuck in RUNNING forever, so every failure ends in
     mark_failed with a sentence written for the user.
     """
-    # Set only once an image actually exists. Everything else - a
-    # quota refusal, a timeout, a sleeping Space, an unusable photo -
-    # leaves it False and refunds the attempt in the finally below.
-    succeeded = False
+    # What the server learned, which decides what happens to the
+    # attempt in the finally block below:
+    #
+    #   "success"   an image exists      -> the attempt is spent
+    #   "confirmed" nothing was produced -> the attempt goes back now
+    #   "uncertain" we never found out   -> the attempt is held, and
+    #               tryon_usage gives it back by itself if no image
+    #               ever turns up (also what covers a backend killed
+    #               mid-generation, since this thread dies with it)
+    outcome_kind = "uncertain"
 
     try:
         person_bytes = _person_photo_bytes(user_email)
@@ -2435,39 +2513,63 @@ def _run_tryon_job(job_id, user_email, items, usage_day=None):
 
         tryon_store.mark_done(job_id, user_email, url, details, outcome)
 
-        succeeded = True
+        outcome_kind = "success"
 
     except virtual_tryon.PhotoUnsuitable as error:
+        # The input cannot be used, which is as confirmed as it gets:
+        # nothing was sent to any provider.
+        outcome_kind = "confirmed"
         tryon_store.mark_failed(job_id, user_email, str(error),
-                                code=virtual_tryon.UNSUPPORTED_INPUT)
+                                code=virtual_tryon.UNSUPPORTED_INPUT,
+                                charged=False, outcome=outcome_kind)
 
     except virtual_tryon.TryOnUnavailable as error:
         # str() is the user-safe sentence; .detail is for us and never
         # reaches the browser.
         print(f"Try-on unavailable for job {job_id} ({error.state}): {error.detail}")
-        tryon_store.mark_failed(job_id, user_email, str(error), code=error.state)
+        outcome_kind = (
+            "confirmed" if tryon_orchestrator.is_confirmed_failure(error.state)
+            else "uncertain"
+        )
+        tryon_store.mark_failed(job_id, user_email, str(error), code=error.state,
+                                charged=outcome_kind == "uncertain",
+                                outcome=outcome_kind)
 
     except storage.StorageError as error:
+        # Our own fault, and confirmed - the image was made but we lost
+        # it, so the user is not charged. It does mean one GPU run was
+        # spent for nothing; that cost is the provider's allowance, not
+        # the user's ten.
         print(f"Try-on storage failed for job {job_id}: {error}")
+        outcome_kind = "confirmed"
         tryon_store.mark_failed(
             job_id, user_email,
             "The try-on worked but the image couldn't be saved. Please try "
-            "again.",
+            "again - this didn't use one of your daily attempts.",
+            charged=False, outcome=outcome_kind,
         )
 
     except Exception as error:  # noqa: BLE001 - a dead thread strands the job
+        # Unknown, so treated as uncertain rather than refunded on the
+        # spot: this could have been raised after the model finished.
         print(f"Try-on job {job_id} failed unexpectedly: {type(error).__name__}")
+        outcome_kind = "uncertain"
         tryon_store.mark_failed(
             job_id, user_email,
             "Something went wrong generating your try-on. Please try again.",
+            charged=True, outcome=outcome_kind,
         )
 
     finally:
-        # Nobody pays for a try-on that produced no image. Credited to
-        # the day the attempt was TAKEN, so one reserved at 23:59 and
-        # refunded at 00:01 goes back where it came from.
-        if not succeeded:
-            tryon_usage.refund(user_email, usage_day)
+        # The attempt was reserved as a hold against this job id, so
+        # exactly one of these applies. Credited to the day it was
+        # TAKEN, so one reserved at 23:59 and returned at 00:01 goes
+        # back where it came from rather than to the new day.
+        if outcome_kind == "success":
+            tryon_usage.settle(user_email, job_id, usage_day)
+        elif outcome_kind == "confirmed":
+            tryon_usage.release(user_email, job_id, usage_day)
+        # "uncertain": the hold stays, and tryon_usage expires it.
 
 
 @app.route("/api/tryon/generate", methods=["POST"])
@@ -2502,6 +2604,34 @@ def start_tryon():
             "success": False,
             "message": "That's too many items for one try-on.",
         }), 400
+
+    # The browser's own id for ONE submission. Answering a repeat with
+    # the job it already started is what makes a double-click, or a
+    # retry after the connection dropped mid-request, cost one attempt
+    # instead of two. Checked before anything else so a replay never
+    # reaches the provider at all.
+    request_id = data.get("request_id")
+
+    if request_id is not None and not (
+        isinstance(request_id, str) and 0 < len(request_id) <= 64
+    ):
+        return jsonify({
+            "success": False,
+            "message": "That try-on request couldn't be identified.",
+        }), 400
+
+    existing = tryon_store.find_by_request_id(user_email, request_id)
+
+    if existing:
+        return jsonify({
+            "success": True,
+            "job_id": existing["job_id"],
+            "total_steps": existing.get("total_steps", 0),
+            "estimated_seconds": 0,
+            "replayed": True,
+            "usage": tryon_usage.snapshot(user_email),
+            "not_applied": [],
+        }), 202
 
     summary = tryon_orchestrator.status_summary()
     engine = summary["engine"]
@@ -2576,13 +2706,43 @@ def start_tryon():
     if engine is None:
         return _no_provider_response()
 
+    # One try-on per account at a time. A second tab, the other laptop,
+    # or a click that beat the disabled button would otherwise spend a
+    # second attempt and a second run of a shared free GPU on the same
+    # person. Refused before anything is reserved, and the running job's
+    # id comes back so the page can simply follow that one instead.
+    running = tryon_store.active_jobs(user_email)
+
+    if len(running) >= config.TRYON_MAX_CONCURRENT_JOBS:
+        return jsonify({
+            "success": False,
+            "code": "generation_in_progress",
+            "message":
+                "A try-on is already being created for your account. Wait "
+                "for it to finish before starting another - this didn't use "
+                "one of your daily attempts.",
+            "job_id": running[0]["job_id"],
+            "usage": tryon_usage.snapshot(user_email),
+        }), 409
+
+    # Hand back any attempt whose outcome never arrived and whose hold
+    # has now expired, so somebody returning after a timeout isn't
+    # short. Two small database operations; no provider call.
+    tryon_usage.release_stale_holds(user_email)
+
     # The daily limit is taken HERE: after every validation, so a
     # rejected request costs nothing, and before the job exists, so
     # nothing is ever generated without an attempt behind it. The
     # check and the increment are one atomic database operation (see
     # tryon_usage.reserve), which is what stops two simultaneous
     # requests both squeezing past the last remaining attempt.
-    granted, usage = tryon_usage.reserve(user_email)
+    #
+    # The job id is made first so the attempt can be reserved AS A HOLD
+    # against it - that is what lets this one attempt be confirmed,
+    # returned, or expired later, instead of just being gone.
+    job_id = tryon_store.new_job_id()
+
+    granted, usage = tryon_usage.reserve(user_email, hold_id=job_id)
 
     if not granted:
         return jsonify({
@@ -2592,13 +2752,36 @@ def start_tryon():
             "usage": usage,
         }), 429
 
-    job_id = tryon_store.create_job(
+    created = tryon_store.create_job(
         user_email,
         [str(item.get("_id")) for item in items],
         source=str(data.get("source") or "manual")[:40],
         occasion=str(data.get("occasion") or "")[:60],
         label=str(data.get("label") or "")[:120],
+        job_id=job_id,
+        usage_day=usage["day"],
+        request_id=request_id,
     )
+
+    if created != job_id:
+        # The unique index refused this insert: the very same submission
+        # created a job in a request that arrived at the same instant and
+        # had not yet been stored when we looked. Nothing of ours is
+        # running, so the attempt we just reserved goes straight back and
+        # the caller is pointed at the job that won. This is the last
+        # window a check-then-insert leaves open, and the database is
+        # what closes it.
+        tryon_usage.release(user_email, job_id, usage["day"])
+
+        return jsonify({
+            "success": True,
+            "job_id": created,
+            "total_steps": 0,
+            "estimated_seconds": 0,
+            "replayed": True,
+            "usage": tryon_usage.snapshot(user_email),
+            "not_applied": [],
+        }), 202
 
     threading.Thread(
         target=_run_tryon_job,

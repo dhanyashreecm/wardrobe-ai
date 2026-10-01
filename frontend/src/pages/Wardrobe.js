@@ -169,12 +169,25 @@ function AddItemModal({ onClose, onSaved, sections, autoCategory, categoryError 
         </ol>
 
         {step === "photo" && (
-          <label className="aw-drop">
-            <input type="file" accept="image/*" onChange={pickFile} hidden />
-            <PlusIcon width={28} height={28} />
-            <strong>Choose a photo</strong>
-            <span>JPG, PNG or WEBP · one piece of clothing per photo works best</span>
-          </label>
+          <>
+            <label className="aw-drop">
+              <input type="file" accept="image/*" onChange={pickFile} hidden />
+              <PlusIcon width={28} height={28} />
+              <strong>Choose a photo</strong>
+              <span>JPG, PNG or WEBP · one piece of clothing per photo works best</span>
+            </label>
+            {/* Said plainly because people assume the opposite and go
+                looking for a white wall. The background is removed
+                automatically; the one thing that genuinely helps is
+                contrast between the garment and whatever it is lying on. */}
+            <p className="aw-hint">
+              A photo on the floor, the bed or a chair is fine — so are
+              wrinkles, shadows and ordinary room lighting. The background is
+              removed for you. The only thing that trips it up is a garment
+              the same colour as the surface under it, so put a white top on
+              something darker.
+            </p>
+          </>
         )}
 
         {step === "crop" && src && (

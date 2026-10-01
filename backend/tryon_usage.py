@@ -42,13 +42,44 @@ laptop - the two machines would disagree about what day it is, and the
 user's count would appear to change when they switched computers. An
 offset needs nothing installed and is identical everywhere.
 
-NOBODY IS CHARGED FOR A FAILURE
--------------------------------
-An attempt is reserved when the job starts and refunded whenever the
-job ends in failure - a GPU quota refusal, a timeout, a sleeping Space,
-a storage error, an unusable photo, anything. Only a try-on that
-actually produced an image costs an attempt. That is both fairer and
-simpler to explain than a list of which errors are the user's fault.
+WHO PAYS FOR A FAILURE: NOBODY, BUT NOT ALWAYS INSTANTLY
+--------------------------------------------------------
+Every reservation is also recorded as a HOLD: a small entry in the
+day's row naming the job it belongs to. What happens to the hold
+depends on what the server actually learned.
+
+  settle()   The image exists. The hold is removed and the attempt
+             stands as used. This is the only way an attempt is spent.
+
+  release()  The failure is CONFIRMED and nothing was produced - the
+             GPU allowance was refused, the Space is asleep, the photo
+             is unusable, the garment unsupported, our own storage
+             broke. The hold is removed and the count goes back down,
+             in one atomic operation so it cannot credit twice.
+
+  (nothing)  The outcome is UNCERTAIN: the request timed out, the
+             connection broke, or the backend was killed in the middle.
+             The model may well have finished the picture at the other
+             end, so releasing immediately would let somebody collect
+             images while paying for none of them. The hold simply
+             stays, and release_stale_holds() gives the attempt back
+             once the hold is older than
+             config.TRYON_UNCERTAIN_HOLD_SECONDS - an hour by default,
+             many times longer than any generation can take. By then
+             the answer is in: no image came.
+
+That last branch is also what saves an attempt when the backend
+restarts mid-generation. The thread that would have released it is
+gone, but the hold it left behind expires on its own.
+
+A KNOWN LIMITATION
+------------------
+The provider (a Gradio Space) offers no "what happened to request X"
+lookup and no idempotency key, so an uncertain outcome genuinely cannot
+be resolved by asking it - the hold-and-expire above is the safe
+substitute, not a reconciliation. If a provider that does support
+status checks is added later, the right place to use it is here, before
+release_stale_holds gives the attempt back.
 """
 
 from datetime import datetime, timedelta
@@ -99,23 +130,41 @@ def snapshot(user_email, now=None):
     day = today(now)
     document = usage_collection.find_one({"_id": _key(user_email, day)})
     used = int((document or {}).get("used", 0))
+    holds = len((document or {}).get("holds") or [])
     limit = config.TRYON_DAILY_LIMIT
 
     return {
+        # What the day's allowance has committed. "used" counts holds
+        # too, because an attempt in flight must not be handed out
+        # twice, and "remaining" is derived from it for the same reason.
         "used": min(used, limit),
         "limit": limit,
         "remaining": max(0, limit - used),
+        # Of that, the images the user can actually open. This is the
+        # figure the limit is really about: a generation only ends up
+        # here once the provider produced an image and the backend
+        # stored it. Everything else is either still running or has
+        # been given back.
+        "successful": max(0, used - holds),
+        "in_progress": holds,
         "day": day,
         "resets_at": next_reset(now).isoformat() + "Z",
     }
 
 
-def reserve(user_email, now=None):
+def reserve(user_email, now=None, hold_id=None):
     """
     Takes one attempt if the account has any left today.
 
     Returns (granted, snapshot). The snapshot always reflects the state
     AFTER the attempt, so a caller can hand it straight to the browser.
+
+    `hold_id` is the job the attempt belongs to. Passing it records the
+    attempt as a HOLD in the same operation, which is what later lets
+    settle() confirm it, release() give it back, or - if the server
+    never finds out what happened - release_stale_holds() expire it.
+    Omitting it charges the attempt outright, which is what the older
+    tests do.
 
     The whole check-and-take is one database operation - see the
     docstring at the top for why that matters.
@@ -123,17 +172,24 @@ def reserve(user_email, now=None):
     day = today(now)
     limit = config.TRYON_DAILY_LIMIT
 
+    update = {
+        "$inc": {"used": 1},
+        "$setOnInsert": {
+            "user_email": user_email,
+            "day": day,
+        },
+        "$set": {"updated_at": datetime.utcnow()},
+    }
+
+    if hold_id:
+        update["$push"] = {
+            "holds": {"job_id": str(hold_id), "at": now or datetime.utcnow()}
+        }
+
     try:
         usage_collection.find_one_and_update(
             {"_id": _key(user_email, day), "used": {"$lt": limit}},
-            {
-                "$inc": {"used": 1},
-                "$setOnInsert": {
-                    "user_email": user_email,
-                    "day": day,
-                },
-                "$set": {"updated_at": datetime.utcnow()},
-            },
+            update,
             upsert=True,
         )
     except Exception as error:  # noqa: BLE001
@@ -170,6 +226,116 @@ def refund(user_email, day=None, now=None):
         )
     except Exception as error:  # noqa: BLE001 - never break a failing job
         print(f"Try-on usage refund failed: {type(error).__name__}")
+
+
+def settle(user_email, hold_id, day=None, now=None):
+    """
+    Confirms a hold: an image exists, so the attempt is genuinely spent.
+
+    Only the hold entry is removed; `used` stays where it is. Called
+    once a generation has finished and the image is stored, so that the
+    expiry sweep below never hands the attempt back afterwards.
+    """
+    day = day or today(now)
+
+    try:
+        usage_collection.update_one(
+            {"_id": _key(user_email, day), "holds.job_id": str(hold_id)},
+            {
+                "$pull": {"holds": {"job_id": str(hold_id)}},
+                "$set": {"updated_at": datetime.utcnow()},
+            },
+        )
+    except Exception as error:  # noqa: BLE001 - never break a finished job
+        print(f"Try-on usage could not be settled: {type(error).__name__}")
+
+
+def release(user_email, hold_id, day=None, now=None):
+    """
+    Gives an attempt back, for a CONFIRMED failure that produced nothing.
+
+    Removing the hold and decrementing the count are one operation, and
+    the filter requires the hold to still be there. So a second release
+    of the same job - a retried error path, two threads, a sweep racing
+    a thread - matches nothing and changes nothing. That is what stops
+    attempts being minted out of thin air.
+
+    Returns True if this call was the one that gave it back.
+    """
+    day = day or today(now)
+
+    try:
+        result = usage_collection.update_one(
+            {
+                "_id": _key(user_email, day),
+                "holds.job_id": str(hold_id),
+                "used": {"$gt": 0},
+            },
+            {
+                "$pull": {"holds": {"job_id": str(hold_id)}},
+                "$inc": {"used": -1},
+                "$set": {"updated_at": datetime.utcnow()},
+            },
+        )
+    except Exception as error:  # noqa: BLE001 - never break a failing job
+        print(f"Try-on usage release failed: {type(error).__name__}")
+        return False
+
+    return bool(getattr(result, "modified_count", 0))
+
+
+def release_stale_holds(user_email, now=None, day=None):
+    """
+    Gives back every attempt whose outcome was never learned and whose
+    hold is now older than config.TRYON_UNCERTAIN_HOLD_SECONDS.
+
+    This is the safe recovery for the cases nothing else can resolve: a
+    timeout, a broken connection, a backend killed mid-generation. It
+    waits long enough that a slow-but-alive generation is never
+    cancelled out from under the user, and it touches no provider and
+    costs no API call - just one indexed read and, only when something
+    has actually expired, one small write each.
+
+    Returns the number of attempts handed back.
+    """
+    now = now or datetime.utcnow()
+
+    if day is None:
+        # Both days, because a hold taken at 23:50 expires at 00:50 the
+        # next day - by which time "today" is a different row, and the
+        # attempt belongs to the day it came from.
+        yesterday = today(now - timedelta(days=1))
+        days = [today(now)]
+        if yesterday not in days:
+            days.append(yesterday)
+        return sum(
+            release_stale_holds(user_email, now=now, day=one) for one in days
+        )
+
+    cutoff = now - timedelta(seconds=config.TRYON_UNCERTAIN_HOLD_SECONDS)
+
+    try:
+        document = usage_collection.find_one({"_id": _key(user_email, day)})
+    except Exception as error:  # noqa: BLE001
+        print(f"Try-on usage sweep could not read: {type(error).__name__}")
+        return 0
+
+    given_back = 0
+
+    for entry in (document or {}).get("holds") or []:
+        taken_at = entry.get("at")
+        if not isinstance(taken_at, datetime) or taken_at > cutoff:
+            continue
+        if release(user_email, entry.get("job_id"), day=day):
+            given_back += 1
+
+    if given_back:
+        print(
+            f"Returned {given_back} held try-on attempt(s) whose outcome "
+            f"never arrived."
+        )
+
+    return given_back
 
 
 def limit_message(snap):

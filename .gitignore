@@ -64,3 +64,12 @@ venv/
 cloud_setup_report.txt
 backend_e2e.log
 check_setup.log
+
+# Generated segmentation benchmark images (rebuilt on demand by
+# backend/tests/test_segmentation_quality.py)
+backend/tests/segmentation_bench/bench/
+
+# Scratch output from backend/tests/smoke_run.py and ui checks
+_ui_sheet.png
+_counter.png
+_shot.png

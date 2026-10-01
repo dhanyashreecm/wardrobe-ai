@@ -245,9 +245,28 @@ class UploadApiTests(unittest.TestCase):
         self.cloud.assert_not_called()
 
     def test_reliable_confident_class_is_applied(self):
-        res = self._auto({"category": "Saree", "confidence": 0.9, "top": [("Saree", 0.9)]})
+        """
+        Saree used to be the example here. It is now a WEAK class on
+        purpose - a draped saree and a flat-laid lehenga look nearly
+        identical to the model, and it was confidently labelling one as
+        the other - so the example moved to a class the model really is
+        reliable on. The rule under test is unchanged: when the model
+        is both confident AND trustworthy about a class, the user is
+        not interrupted.
+        """
+        res = self._auto({"category": "Shirt", "confidence": 0.93,
+                          "top": [("Shirt", 0.93)]})
         self.assertEqual(res.status_code, 200, res.get_json())
-        self.assertEqual(self.add_item.call_args[0][1], "Saree")
+        self.assertEqual(self.add_item.call_args[0][1], "Shirt")
+
+    def test_a_confident_saree_now_asks_because_lehengas_look_the_same(self):
+        res = self._auto({"category": "Saree", "confidence": 0.9,
+                          "top": [("Saree", 0.9)]})
+        self.assertEqual(res.status_code, 422)
+        values = [option["value"] for option in res.get_json()["options"]]
+        self.assertIn("Saree", values)
+        self.assertIn("Lehenga", values)
+        self.add_item.assert_not_called()
 
     def test_unsure_classifier_asks_the_user(self):
         res = self._auto({"category": "Saree", "confidence": 0.3,

@@ -327,6 +327,13 @@ TRYON_PROVIDER = _get("TRYON_PROVIDER", "huggingface_space")
 # notebook is started; blank = no self-hosted fallback.
 TRYON_FALLBACK_URL = _get("TRYON_FALLBACK_URL")
 
+# A SECOND self-hosted notebook, so Kaggle and Colab can both be
+# configured at once. They are separate free GPUs with separate
+# allowances, so two running notebooks genuinely double the number of
+# try-ons that can succeed in a day - and either one going to sleep
+# stops being a complete outage. Blank = only one fallback.
+TRYON_FALLBACK_URL_2 = _get("TRYON_FALLBACK_URL_2")
+
 # The Space that hosts the model, as "owner/space-name" - normally the
 # official public one, "fashn-ai/fashn-vton-1.5" (free, ZeroGPU). Your
 # own copy (spaces/tryon/) or a Colab share link also work.
@@ -394,6 +401,45 @@ try:
 except ValueError:
     TRYON_RESET_OFFSET_HOURS = 5.5
 
+# How many try-ons ONE ACCOUNT may have running at the same moment.
+#
+# One, deliberately. A try-on costs a GPU run on a shared free
+# allowance, so two at once from the same person - a second browser
+# tab, the other laptop, an impatient double-click that beat the
+# disabled button - spends two of the day's attempts and two GPU runs
+# on one person while everybody else waits. The second request is
+# refused immediately, before anything is reserved or submitted.
+try:
+    TRYON_MAX_CONCURRENT_JOBS = int(
+        _get("TRYON_MAX_CONCURRENT_JOBS", "1") or "1"
+    )
+except ValueError:
+    TRYON_MAX_CONCURRENT_JOBS = 1
+
+if TRYON_MAX_CONCURRENT_JOBS < 1:
+    TRYON_MAX_CONCURRENT_JOBS = 1
+
+# How long an attempt with an UNCERTAIN outcome stays held before it is
+# given back automatically (see tryon_usage.py).
+#
+# "Uncertain" means the server never learned whether the model produced
+# an image: the request timed out, the connection broke, or the backend
+# was killed mid-generation. The image may still arrive at the provider
+# end, so the attempt is not refunded straight away - that would let a
+# user collect pictures while paying for none of them. It is not kept
+# for ever either. An hour is far longer than any generation can take
+# (TRYON_TIMEOUT_SECONDS is 300 at most), so by the time the hold
+# expires the answer is in: nothing came, and the attempt goes back.
+try:
+    TRYON_UNCERTAIN_HOLD_SECONDS = int(
+        _get("TRYON_UNCERTAIN_HOLD_SECONDS", "3600") or "3600"
+    )
+except ValueError:
+    TRYON_UNCERTAIN_HOLD_SECONDS = 3600
+
+if TRYON_UNCERTAIN_HOLD_SECONDS < 60:
+    TRYON_UNCERTAIN_HOLD_SECONDS = 3600
+
 
 def tryon_host_is_url():
     """
@@ -421,9 +467,13 @@ def tryon_configured():
     names = [n.strip() for n in TRYON_PROVIDERS.split(",") if n.strip()] or [TRYON_PROVIDER]
     if TRYON_FALLBACK_URL and "self_hosted" not in names:
         names.append("self_hosted")
+    if TRYON_FALLBACK_URL_2 and "self_hosted_2" not in names:
+        names.append("self_hosted_2")
     if any(n in ("huggingface_space", "fashn_space") for n in names) and TRYON_SPACE_ID:
         return True
     if "self_hosted" in names and TRYON_FALLBACK_URL.startswith("https://"):
+        return True
+    if "self_hosted_2" in names and TRYON_FALLBACK_URL_2.startswith("https://"):
         return True
     # A token is optional: a public Space answers anonymous callers
     # too, just from a smaller GPU allowance.
