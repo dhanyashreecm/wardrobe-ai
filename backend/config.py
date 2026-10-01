@@ -284,6 +284,35 @@ def email_configured():
 
 
 # ============================================================
+# SHOP THIS LOOK (optional - see backend/shopping/)
+#
+# SERPAPI_API_KEY: Google Lens results through SerpApi
+# (https://serpapi.com - free plan, 250 searches a month). With it,
+# Find Similar shows real products - exact matches when Google finds
+# the same picture on a shop's product page - from Myntra, AJIO,
+# Amazon, Flipkart, Nykaa Fashion and others, with price and stock.
+# Without it, Find Similar still works and offers keyword search links
+# for each shop instead. The key never leaves this server.
+#
+# Each photo costs 1 search, or 2 with SHOP_LENS_EXACT_MATCHES on (a
+# second, exact-product lookup). Results are cached for
+# SHOP_CACHE_HOURS, so searching the same photo again is free.
+# ============================================================
+
+SERPAPI_API_KEY = _get("SERPAPI_API_KEY")
+SHOP_COUNTRY = _get("SHOP_COUNTRY", "in").lower()
+SHOP_LENS_EXACT_MATCHES = _flag("SHOP_LENS_EXACT_MATCHES", True)
+try:
+    SHOP_CACHE_HOURS = max(0.0, float(_get("SHOP_CACHE_HOURS", "12")))
+except ValueError:
+    SHOP_CACHE_HOURS = 12.0
+
+
+def shopping_api_configured():
+    return bool(SERPAPI_API_KEY)
+
+
+# ============================================================
 # EMAIL VERIFICATION & LOGIN SECURITY (see auth.py / auth_routes.py)
 #
 # REQUIRE_EMAIL_VERIFICATION: new accounts must enter a 6-digit code
@@ -547,6 +576,9 @@ def describe_startup():
     )
     lines.append(
         f"  Email         : {'configured' if email_configured() else 'not configured'}"
+    )
+    lines.append(
+        f"  Shop search   : {'Google Lens via SerpApi' if shopping_api_configured() else 'search links only (no SERPAPI_API_KEY)'}"
     )
     lines.append(
         f"  Email verify  : {'required for new accounts' if REQUIRE_EMAIL_VERIFICATION else 'off'}"

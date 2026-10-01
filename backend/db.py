@@ -139,6 +139,11 @@ def ensure_indexes():
         ("wardrobe", [("user_email", 1)], {"name": "user_email_1"}),
         ("trips", [("user_email", 1)], {"name": "user_email_1"}),
         (
+            "wishlist",
+            [("user_email", 1), ("url", 1)],
+            {"name": "wishlist_owner_url_unique", "unique": True},
+        ),
+        (
             "wardrobe",
             [("migrated_from_id", 1)],
             {

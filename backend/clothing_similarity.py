@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 import numpy as np
 import tensorflow as tf
@@ -445,6 +446,34 @@ def find_similar(
 # COMPARE AGAINST USER'S WARDROBE
 # ============================================================
 
+# Wardrobe photos rarely change, but every Find Similar search used to
+# run the model over EVERY item again. Features are cached per file
+# (path + modification time + size), so a changed or replaced image is
+# re-read automatically. Bounded so a huge wardrobe can't grow it
+# without limit.
+_WARDROBE_FEATURE_CACHE = {}
+_WARDROBE_FEATURE_CACHE_MAX = 5000
+
+
+def _wardrobe_feature(path):
+    try:
+        stat = os.stat(path)
+        key = (str(path), stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        key = None
+
+    if key is not None and key in _WARDROBE_FEATURE_CACHE:
+        return _WARDROBE_FEATURE_CACHE[key]
+
+    feature = extract_feature(str(path))
+
+    if key is not None:
+        if len(_WARDROBE_FEATURE_CACHE) >= _WARDROBE_FEATURE_CACHE_MAX:
+            _WARDROBE_FEATURE_CACHE.clear()
+        _WARDROBE_FEATURE_CACHE[key] = feature
+    return feature
+
+
 def find_similar_in_wardrobe(
     query_image_path,
     wardrobe_items,
@@ -555,12 +584,8 @@ def find_similar_in_wardrobe(
 
         try:
 
-            wardrobe_feature = (
-                extract_feature(
-                    str(
-                        wardrobe_image_path
-                    )
-                )
+            wardrobe_feature = _wardrobe_feature(
+                wardrobe_image_path
             )
 
 

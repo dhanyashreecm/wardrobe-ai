@@ -47,6 +47,8 @@ SETTINGS = [
     # The https share link printed by spaces/tryon/colab_tryon.ipynb -
     # the self-hosted fallback provider.
     "TRYON_FALLBACK_URL",
+    # "Shop this look" product search (Google Lens via SerpApi).
+    "SERPAPI_API_KEY",
 ]
 
 # Names this script does not manage but must not destroy when it

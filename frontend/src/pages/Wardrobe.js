@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import axios from "axios";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import Cropper from "react-easy-crop";
 import Layout from "../components/Layout";
 import { ProfileChip } from "../components/PageHeader";
@@ -343,6 +343,7 @@ function EditItemModal({ item, sections, onClose, onSaved }) {
 
 function Wardrobe() {
   const navigate = useNavigate();
+  const location = useLocation();
   // Gender and categories come from the account on the server.
   const { sections, gender, error: categoryError } = useCategories();
   const [items, setItems] = useState([]);
@@ -388,6 +389,15 @@ function Wardrobe() {
       .then((d) => setAutoCategory(Boolean(d.auto_category)))
       .catch(() => setAutoCategory(false));
   }, [fetchItems, navigate]);
+
+  // "View in wardrobe" from Find Similar opens that item straight away.
+  const openItemId = location.state?.openItem;
+  useEffect(() => {
+    if (!openItemId || !loaded) return;
+    const match = items.find((i) => i._id === openItemId);
+    if (match) setDetail(match);
+    navigate(location.pathname, { replace: true, state: {} });
+  }, [openItemId, loaded, items, navigate, location.pathname]);
 
   const flash = (message) => {
     setToast(message);

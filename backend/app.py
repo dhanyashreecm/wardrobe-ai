@@ -7,6 +7,10 @@ from flask_jwt_extended import (
     get_jwt_identity
 )
 from backend.auth_routes import auth_blueprint
+from backend.shopping_routes import shopping_blueprint
+from backend.shopping.analysis import analyse_photo
+from backend.shopping.ranking import wardrobe_match_level, wardrobe_summary
+from backend import wishlist
 from backend.auth import (
     get_user_gender,
     migrate_user_gender,
@@ -303,6 +307,8 @@ def current_user_email():
 # =========================================================
 
 app.register_blueprint(auth_blueprint)
+# Find Similar's "Shop this look" and the wishlist (backend/shopping_routes.py).
+app.register_blueprint(shopping_blueprint)
 
 
 # =========================================================
@@ -1171,11 +1177,15 @@ def find_similar_clothes():
 
     # -----------------------------------------------------
     # Save query image
+    #
+    # Under a random name: the browser's own filename used to be
+    # used, so two people searching with "IMG_0001.jpg" at the same
+    # moment overwrote each other's photo. Deleted again once the
+    # search is done (see the finally: below).
     # -----------------------------------------------------
 
-    filename = secure_filename(
-        image.filename
-    )
+    extension = os.path.splitext(secure_filename(image.filename or ""))[1].lower()
+    filename = f"{uuid.uuid4().hex}{extension if extension in ('.jpg', '.jpeg', '.png', '.webp') else '.jpg'}"
 
     temp_folder = os.path.join(
         BASE_UPLOAD_FOLDER,
@@ -1290,6 +1300,27 @@ def find_similar_clothes():
 
 
         # -------------------------------------------------
+        # MATCH LEVELS + PHOTO ATTRIBUTES (for "Shop this look")
+        #
+        # Labels on the wardrobe matches so the page can say "you
+        # probably own this" vs "you have something like it", and the
+        # photo's attributes (type, colours) as editable words, which
+        # the page sends to /api/shop/search so the photo is analysed
+        # only once. Purely additive: every field above is unchanged.
+        # -------------------------------------------------
+
+        for item in wardrobe_results:
+            item["item_id"] = str(item["item_id"]) if item.get("item_id") is not None else None
+            item["match_level"] = wardrobe_match_level(item.get("similarity"))
+
+        try:
+            analysis = analyse_photo(image_path, account_gender, category_results)
+        except Exception as error:  # noqa: BLE001 - attributes are a bonus, never a failure
+            print(f"Photo analysis skipped: {type(error).__name__}")
+            analysis = None
+
+
+        # -------------------------------------------------
         # RESPONSE
         # -------------------------------------------------
 
@@ -1307,7 +1338,13 @@ def find_similar_clothes():
                 indofashion_results,
 
             "category_results":
-                category_results
+                category_results,
+
+            "wardrobe_status":
+                wardrobe_summary(wardrobe_results),
+
+            "analysis":
+                analysis
 
         }), 200
 
@@ -1329,6 +1366,13 @@ def find_similar_clothes():
             "message": str(e)
 
         }), 500
+
+    finally:
+        # The query photo is only needed while this request runs.
+        try:
+            os.remove(image_path)
+        except OSError:
+            pass
 
 
 # =========================================================
@@ -2550,6 +2594,7 @@ def delete_account():
     delete_all_wardrobe_for_user(user_email)
     delete_all_trips_for_user(user_email)
     outfit_feedback.delete_all_for_user(user_email)
+    wishlist.delete_all_for_user(user_email)
 
     # Photographs of a person's body must not outlive the account
     # they belonged to. The records go first, then the images
