@@ -80,8 +80,9 @@ def search(image_bytes, analysis):
     }
 
     if not config.shopping_api_configured():
-        result["message"] = ("Product search isn't set up on this server yet, so here are "
-                             "searches for this look on each shop.")
+        result["message"] = ("Exact product links aren't available yet: the server needs a "
+                             "Google Lens (SerpApi) key to look this photo up in shops. Until "
+                             "then, here are searches for this look on each shop.")
         return result
 
     # The user's own keywords refine Lens; detected words don't (they

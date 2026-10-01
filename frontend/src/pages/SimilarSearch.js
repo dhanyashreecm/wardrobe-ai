@@ -369,6 +369,7 @@ function SimilarSearch() {
     });
 
   const compared = products.filter((p) => compareIds.includes(p.id));
+  const exactMatches = products.filter((p) => p.match === "exact");
   const filtersActive = platformFilter.length || matchFilter || categoryFilter || colourFilter || minPrice || maxPrice;
 
   const clearFilters = () => {
@@ -569,8 +570,26 @@ function SimilarSearch() {
 
               {shopState === "done" && shop && (
                 <>
-                  {shop.status === "exact_found" && (
-                    <p className="sim-sub">Found the exact product in at least one shop, plus similar options.</p>
+                  {exactMatches.length > 0 && (
+                    <section className="aw-card sim-exact" aria-label="Exact product found">
+                      <h3 className="sim-h3">
+                        ✓ We found this exact piece{exactMatches.length > 1 ? ` in ${exactMatches.length} shops` : ""}
+                      </h3>
+                      {exactMatches.map((p) => (
+                        <div key={p.id} className="sim-exact-row">
+                          <div className="sim-exact-img"><ProductImage src={p.image} alt={p.title} /></div>
+                          <div className="sim-exact-info">
+                            <div className="sim-platform">{p.platform}</div>
+                            <div className="sim-title">{p.title}</div>
+                            {formatPrice(p) && <strong>{formatPrice(p)}</strong>}
+                            <div className="sim-exact-url" title={p.url}>{p.url}</div>
+                          </div>
+                          <a className="aw-btn" href={p.url} target="_blank" rel="noopener noreferrer">
+                            Buy on {p.platform || "the shop"} ↗
+                          </a>
+                        </div>
+                      ))}
+                    </section>
                   )}
                   {shop.message && (
                     <p className={`sim-sub${shop.status === "provider_error" ? " sim-warn" : ""}`}>{shop.message}</p>

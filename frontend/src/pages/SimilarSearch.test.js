@@ -98,7 +98,7 @@ test('nothing similar owned: searches shops automatically and labels products ho
   renderPage();
   await upload();
 
-  expect(await screen.findByText('Pink Embroidered Kurta')).toBeInTheDocument();
+  expect((await screen.findAllByText('Pink Embroidered Kurta')).length).toBeGreaterThan(0);
   expect(screen.getByAltText('Your uploaded clothing')).toHaveAttribute('src', 'blob:preview');
   expect(shopCalls()).toHaveLength(1);
 
@@ -108,6 +108,12 @@ test('nothing similar owned: searches shops automatically and labels products ho
   expect(within(cards[2]).getByText('Same category')).toBeInTheDocument();
   expect(within(cards[2]).getByText('Out of stock')).toBeInTheDocument();
   expect(within(cards[2]).getByLabelText('No image available')).toBeInTheDocument();
+
+  // The exact product's own page is offered first, as a direct link.
+  const exact = screen.getByRole('region', { name: 'Exact product found' });
+  expect(within(exact).getByText('We found this exact piece', { exact: false })).toBeInTheDocument();
+  expect(within(exact).getByRole('link', { name: 'Buy on AJIO ↗' })).toHaveAttribute('href', 'https://www.ajio.com/p/1');
+  expect(within(exact).queryByText('Pink Straight Kurta')).toBeNull();
 
   const view = within(cards[0]).getByRole('link', { name: /View Product/ });
   expect(view).toHaveAttribute('href', 'https://www.ajio.com/p/1');
@@ -143,12 +149,13 @@ test('owning something very close: no automatic shop search, offered with a butt
 test('no product search available: shop links instead of fake products', async () => {
   shopReply = () => Promise.resolve(shopResponse({
     status: 'links_only', products: [],
-    message: "Product search isn't set up on this server yet, so here are searches for this look on each shop.",
+    message: "Exact product links aren't available yet: the server needs a Google Lens (SerpApi) key.",
   }));
   renderPage();
   await upload();
 
-  expect(await screen.findByText(/isn't set up on this server/)).toBeInTheDocument();
+  expect(await screen.findByText(/Exact product links aren't available yet/)).toBeInTheDocument();
+  expect(screen.queryByLabelText('Exact product found')).toBeNull();
   expect(screen.queryAllByTestId('product-card')).toHaveLength(0);
   expect(screen.getByRole('link', { name: 'AJIO ↗' })).toBeInTheDocument();
 });
@@ -161,13 +168,13 @@ test('a failed shop search can be retried', async () => {
   expect(await screen.findByText('Shop search broke.')).toBeInTheDocument();
   shopReply = () => Promise.resolve(shopResponse());
   fireEvent.click(screen.getAllByRole('button', { name: 'Retry' })[0]);
-  expect(await screen.findByText('Pink Embroidered Kurta')).toBeInTheDocument();
+  expect((await screen.findAllByText('Pink Embroidered Kurta')).length).toBeGreaterThan(0);
 });
 
 test('edited keywords are sent with the next shop search', async () => {
   renderPage();
   await upload();
-  await screen.findByText('Pink Embroidered Kurta');
+  await screen.findAllByText('Pink Embroidered Kurta');
 
   fireEvent.change(screen.getByPlaceholderText('e.g. yellow anarkali mirror work'), { target: { value: 'pink chikankari kurta' } });
   fireEvent.change(screen.getAllByPlaceholderText('unknown')[0], { target: { value: 'kurti' } });
@@ -183,7 +190,7 @@ test('edited keywords are sent with the next shop search', async () => {
 test('filters and price sorting work on the shown products', async () => {
   renderPage();
   await upload();
-  await screen.findByText('Pink Embroidered Kurta');
+  await screen.findAllByText('Pink Embroidered Kurta');
 
   fireEvent.click(screen.getByRole('button', { name: 'Myntra' }));
   expect(screen.getAllByTestId('product-card')).toHaveLength(1);
@@ -200,7 +207,7 @@ test('filters and price sorting work on the shown products', async () => {
 test('wishlist save and compare', async () => {
   renderPage();
   await upload();
-  await screen.findByText('Pink Embroidered Kurta');
+  await screen.findAllByText('Pink Embroidered Kurta');
 
   const cards = screen.getAllByTestId('product-card');
   fireEvent.click(within(cards[0]).getByRole('button', { name: 'Save to wishlist' }));
@@ -223,7 +230,7 @@ test('dataset suggestions are not shown, even when the server sends them', async
     indofashion_results: [{ image: 'dataset/indofashion/processed/b.jpg', similarity: 0.6 }] } });
   renderPage();
   await upload();
-  await screen.findByText('Pink Embroidered Kurta');
+  await screen.findAllByText('Pink Embroidered Kurta');
   expect(screen.queryByText(/More Ideas/)).toBeNull();
   expect(screen.queryByText(/IndoFashion/)).toBeNull();
   expect(screen.queryByAltText('Similar clothing')).toBeNull();

@@ -92,6 +92,20 @@
   font-size: 14px;
 }
 
+/* ---------- exact product found ---------- */
+.sim-exact { padding: 16px 18px; margin-bottom: 18px; border: 1.5px solid #3f6634; background: #f4f8f1; }
+.sim-exact .sim-h3 { color: #3f6634; }
+.sim-exact-row { display: flex; align-items: center; gap: 14px; padding: 10px 0; border-top: 1px solid #d6e3cd; }
+.sim-exact-row:first-of-type { border-top: none; }
+.sim-exact-img { width: 64px; flex-shrink: 0; aspect-ratio: 3 / 4; border-radius: 8px; overflow: hidden; background: #f3ebe4; }
+.sim-exact-img img { width: 100%; height: 100%; object-fit: cover; }
+.sim-exact-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 13.5px; }
+.sim-exact-url { font-size: 11.5px; color: var(--aw-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 520px) {
+  .sim-exact-row { flex-wrap: wrap; }
+  .sim-exact-row .aw-btn { width: 100%; }
+}
+
 /* ---------- filters ---------- */
 .sim-filters { display: flex; flex-wrap: wrap; gap: 14px; padding: 14px 16px; align-items: flex-end; margin-bottom: 10px; }
 .sim-filter-group { display: flex; flex-direction: column; gap: 6px; min-width: 130px; }
