@@ -150,6 +150,23 @@ EXPLICIT_PROFILES = {
     # fall through to the neutral "casual" profile, which would rank a
     # lehenga as everyday wear and let it lose a wedding to a t-shirt.
     # Stated explicitly rather than implied by thin data.
+    # Palazzos: the word maps onto the Myntra article "Patiala" in
+    # ARTICLE_ALIASES below, and Patiala salwars measure as 100%
+    # ethnic. Palazzos are not Patiala salwars. They are wide-legged
+    # trousers worn to college with a top far more often than to a
+    # function with a kurta, and borrowing Patiala's numbers made every
+    # pair in the wardrobe come out as "Ethnic, Smart - suits
+    # Traditional, Wedding".
+    #
+    # Stated explicitly here (EXPLICIT_PROFILES is consulted before the
+    # alias table) so the mix reflects the garment: mostly everyday,
+    # genuinely ethnic some of the time, never formal. Shararas keep
+    # the festive reading - they are a different garment and are
+    # handled separately in outfit_recommendation.
+    "palazzo": {"Casual": 0.6, "Ethnic": 0.3, "Smart Casual": 0.1},
+    "palazzos": {"Casual": 0.6, "Ethnic": 0.3, "Smart Casual": 0.1},
+    "sharara": {"Ethnic": 0.9, "Party": 0.1},
+    "shararas": {"Ethnic": 0.9, "Party": 0.1},
     "lehenga": {"Ethnic": 0.85, "Party": 0.15},
     "lehengas": {"Ethnic": 0.85, "Party": 0.15},
     "anarkali": {"Ethnic": 0.9, "Party": 0.1},

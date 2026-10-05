@@ -69,6 +69,12 @@ _STYLE_TOKENS = {
     CASUAL: {
         "tshirt", "tshirts", "jean", "jeans", "short", "shorts",
         "legging", "leggings", "salwar", "salwars", "crop", "tank",
+        # Palazzos sit with leggings, not with blazers. They used to
+        # fall through to the smart_casual default (see the comment
+        # below), which read as "Smart" on the wardrobe card for a pair
+        # of cotton trousers somebody wears to college. Shararas are
+        # NOT here - they are festive, and are kept that way.
+        "palazzo", "palazzos",
     },
     FORMAL: {
         "blazer", "blazers", "suit", "suits",

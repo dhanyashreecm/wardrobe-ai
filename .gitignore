@@ -73,3 +73,10 @@ backend/tests/segmentation_bench/bench/
 _ui_sheet.png
 _counter.png
 _shot.png
+
+# Photographs used as test fixtures - someone's home and clothes,
+# so they stay on the machine that took them.
+backend/tests/real_photos/
+
+# Scratch output from backend/tests/segmentation_bench/score.py
+backend/tests/segmentation_bench/result_*.json

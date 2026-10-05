@@ -233,6 +233,43 @@ MIN_EDGE_ALIGNMENT = 1.0   # below this the outline is not on any edge
 MIN_BBOX_FILL = 0.35       # a garment is a solid shape, not a scatter
 
 
+def _runs_off_the_frame(mask, edge=0.05):
+    """
+    True when the mask has no real boundary inside the photo - the sign
+    of a cut-out that has swallowed the backdrop rather than found the
+    garment.
+
+    Deliberately more forgiving than _is_compact_object, which rejects
+    anything touching two sides. Two sides is NORMAL: people photograph
+    a garment so it fills the frame, and a pair of wide-legged palazzos
+    shot from above really does run from the left edge to the right one
+    while sitting well inside the top and bottom. Rejecting that threw
+    away a perfectly good cut-out.
+
+    What is not normal is a mask pressed against every side at once, or
+    against three sides while covering most of the picture. That is the
+    floor, not the clothes.
+    """
+    hard = mask > 0.5
+    ys, xs = np.where(hard)
+
+    if len(xs) == 0:
+        return True
+
+    h, w = hard.shape
+    touching = sum([
+        xs.min() < w * edge,
+        xs.max() > w * (1 - edge),
+        ys.min() < h * edge,
+        ys.max() > h * (1 - edge),
+    ])
+
+    if touching >= 4:
+        return True
+
+    return touching >= 3 and float(hard.mean()) > 0.6
+
+
 def _bbox_fill(mask):
     """
     How much of its own bounding box the mask actually fills.
@@ -255,21 +292,44 @@ def _bbox_fill(mask):
     return float(hard.sum() / box) if box else 0.0
 
 
-def mask_is_plausible(img, mask):
+def mask_is_plausible(img, mask, learned=False):
     """
-    Whether a mask is worth using at all. Three independent checks, so
-    one of them being fooled is not enough to let a ruined cut-out
+    Whether a mask is worth using at all. Several independent checks,
+    so one of them being fooled is not enough to let a ruined cut-out
     through:
 
       * it covers a sensible share of the frame,
-      * it is one object lying inside the photo rather than something
-        running off every side,
       * it is a solid shape rather than a scatter of patches,
-      * its outline sits on real edges.
+      * its outline sits on real edges,
+      * and it has a real boundary inside the photo.
 
     A mask that fails is not used, and the photo is kept instead -
-    which is always better than storing a garment with its sleeves
-    sliced off.
+    always better than storing a garment with its sleeves sliced off.
+
+    WHY `learned` EXISTS
+
+    That last check is applied at two different strictnesses, because
+    the two engines fail differently and deserve different trust.
+
+    rembg is a segmentation model: it has a learned notion of "object",
+    so a mask of its that runs from the left edge of the frame to the
+    right one is usually a garment photographed to fill the picture -
+    a pair of wide-legged palazzos shot from above, say. Judging that
+    harshly threw away good cut-outs.
+
+    GrabCut has no notion of object at all. It clusters colours. When
+    the garment and the floor are close in colour it will happily
+    return a mask that spans the frame because it has absorbed the
+    floor - a t-shirt the colour of floorboards comes back nearly
+    twice its real size. On the measurements available (coverage,
+    bounding-box fill, edge alignment) that failure is INDISTINGUISHABLE
+    from the palazzos, so no threshold can separate them and pretending
+    otherwise would be fitting a number to two examples.
+
+    So: a learned mask is allowed to touch the frame, a colour-clustered
+    one is not. When GrabCut is refused on those grounds the photo is
+    kept whole and the user is told, which is the honest outcome - and
+    the practical reason to install rembg.
     """
     if mask is None:
         return False
@@ -279,7 +339,10 @@ def mask_is_plausible(img, mask):
     if not (MIN_FOREGROUND <= share <= MAX_FOREGROUND):
         return False
 
-    if not _is_compact_object(mask):
+    if learned:
+        if _runs_off_the_frame(mask):
+            return False
+    elif not _is_compact_object(mask):
         return False
 
     if _bbox_fill(mask) < MIN_BBOX_FILL:
@@ -323,7 +386,7 @@ def segment(img):
             mask = None
 
         if mask is not None:
-            if mask_is_plausible(img, mask):
+            if mask_is_plausible(img, mask, learned=True):
                 return mask, "rembg"
             print("rembg produced an implausible cut-out; trying OpenCV.")
 

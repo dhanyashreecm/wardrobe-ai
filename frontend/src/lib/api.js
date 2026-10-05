@@ -99,5 +99,9 @@ export function outfitTags(outfit) {
 // Style labels mean nothing for shoes and accessories.
 export function itemMeta(item) {
   const showStyle = !["Shoes", "Accessories"].includes(item.group);
-  return [item.group, showStyle ? item.style_label : null, item.color].filter(Boolean).join(" • ");
+  // color_display is the everyday word for the measured shade ("rose"
+  // becomes "Pink"); the exact shade is still on item.color for search
+  // and colour matching.
+  const colour = item.color_display || item.color;
+  return [item.group, showStyle ? item.style_label : null, colour].filter(Boolean).join(" • ");
 }

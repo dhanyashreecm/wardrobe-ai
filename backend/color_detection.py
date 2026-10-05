@@ -642,3 +642,78 @@ def _describe_garment_pixels(garment_pixels, backdrop_rgb):
         "is_patterned": bool(secondary) or spread > _PATTERN_SPREAD,
         "confidence": confidence,
     }
+
+# ============================================================
+# DISPLAY NAMES
+# ============================================================
+#
+# The detector picks from 95 shade words, which is right for matching
+# ("rose" and "blush" really do behave differently next to navy) and
+# wrong for reading. A user who photographs pink trousers wants to be
+# told they are pink, not rose - and when they search their wardrobe
+# for "pink" they expect those trousers back.
+#
+# So the shade is kept exactly as measured, and this maps it onto the
+# everyday word for the same colour. Nothing is overwritten: callers
+# get both, and the stored value never changes, so the wardrobes
+# already full of "rose" and "teal" items keep working.
+
+_DISPLAY_NAMES = {
+    # pinks and reds
+    "rose": "Pink", "blush": "Pink", "pink": "Pink", "magenta": "Pink",
+    "fuchsia": "Pink", "salmon": "Pink",
+    "red": "Red", "crimson": "Red", "scarlet": "Red", "cherry": "Red",
+    "maroon": "Maroon", "burgundy": "Maroon", "wine": "Maroon",
+    "brick": "Maroon", "rust": "Brown",
+    # oranges and yellows
+    "orange": "Orange", "coral": "Orange", "peach": "Orange",
+    "tangerine": "Orange", "apricot": "Orange",
+    "yellow": "Yellow", "mustard": "Yellow", "lemon": "Yellow",
+    "amber": "Yellow", "ochre": "Yellow",
+    # greens
+    "green": "Green", "olive": "Green", "mint": "Green", "sage": "Green",
+    "emerald": "Green", "lime": "Green", "forest": "Green", "teal": "Green",
+    # blues
+    "blue": "Blue", "sky": "Blue", "powder": "Blue", "cobalt": "Blue",
+    "denim": "Blue", "turquoise": "Blue", "aqua": "Blue", "cyan": "Blue",
+    "navy": "Navy", "indigo": "Navy", "midnight": "Navy",
+    # purples
+    "purple": "Purple", "violet": "Purple", "lavender": "Purple",
+    "lilac": "Purple", "plum": "Purple", "mauve": "Purple",
+    # browns and neutrals
+    "brown": "Brown", "tan": "Brown", "camel": "Brown", "chocolate": "Brown",
+    "coffee": "Brown", "khaki": "Brown", "bronze": "Brown",
+    "beige": "Beige", "sand": "Beige", "taupe": "Beige", "nude": "Beige",
+    "cream": "Cream", "ivory": "Cream", "off-white": "Cream", "ecru": "Cream",
+    "white": "White", "black": "Black",
+    "grey": "Grey", "gray": "Grey", "charcoal": "Grey", "slate": "Grey",
+    "ash": "Grey", "stone": "Grey",
+    "gold": "Gold", "silver": "Silver",
+}
+
+
+def display_name(color_word):
+    """
+    The everyday word for a measured shade: "rose" -> "Pink".
+
+    An unknown word is returned title-cased rather than dropped or
+    guessed at - a colour nobody has mapped is still better shown as
+    the user typed it than replaced with something invented.
+    """
+    if not color_word:
+        return ""
+
+    word = str(color_word).strip().lower()
+
+    if not word:
+        return ""
+
+    if word in _DISPLAY_NAMES:
+        return _DISPLAY_NAMES[word]
+
+    # "dark navy", "light pink" - take the colour word, keep the rest.
+    for part in reversed(word.replace("-", " ").split()):
+        if part in _DISPLAY_NAMES:
+            return _DISPLAY_NAMES[part]
+
+    return word.title()

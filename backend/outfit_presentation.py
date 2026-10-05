@@ -73,10 +73,17 @@ def item_style_label(item):
 
 def present_item(item):
     """Adds display fields; never changes the stored item."""
+    from backend import color_detection
+
     enriched = dict(item)
     enriched["display_name"] = display_name(item)
     enriched["group"] = item_group(item)
     enriched["style_label"] = item_style_label(item)
+    # The everyday word for the measured shade: "rose" -> "Pink". Added
+    # alongside the stored colour, never over it, so the precise shade
+    # stays available for matching and nothing already in the wardrobe
+    # has to be rewritten.
+    enriched["color_display"] = color_detection.display_name(item.get("color"))
     return enriched
 
 

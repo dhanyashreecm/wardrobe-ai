@@ -143,7 +143,15 @@ CATEGORY_OCCASION_AFFINITY = {
     "gowns": {"date", "party"},
     "dupatta": {"wedding", "traditional"},
     "dupattas": {"wedding", "traditional"},
-    "palazzo": {"wedding", "traditional"},
+    # Palazzos are EVERYDAY trousers that happen to also work with a
+    # kurta - the same shape as "legging" two lines down. They used to
+    # read {"wedding", "traditional"} because the usage data maps the
+    # word onto "Patiala" (see occasion_model), and a Patiala salwar
+    # really is festive. A plain cotton palazzo is not: it is what
+    # somebody wears to college. "traditional" stays, so kurta +
+    # palazzo outfits still build; "wedding" goes, because a palazzo
+    # is not wedding wear and claiming so was the bug.
+    "palazzo": {"casual", "day_outing", "college", "traditional"},
     "palazzos": {"wedding", "traditional"},
     "pajama": {"wedding", "traditional"},
     # plain leggings: athleisure with a tee, or under a kurti
@@ -157,6 +165,12 @@ CATEGORY_OCCASION_AFFINITY = {
 SPORTSWEAR_WORDS = {"track", "trackpants", "jogger", "joggers", "sweatpants",
                     "tracksuit", "gym", "activewear", "sportswear", "yoga", "running",
                     "sports", "sport", "jersey", "athletic"}
+
+# Shararas and ghararas share the "palazzo" garment kind - they are the
+# same shape - but not its everyday use. These are flared festive
+# bottoms worn to weddings, so they are named here and decided before
+# the kind lookup, exactly as sportswear is.
+FESTIVE_BOTTOM_WORDS = {"sharara", "shararas", "gharara", "ghararas"}
 
 # "Formal Shirt" / "Formal Trousers": workwear, dinner at most - never
 # casual, college or a party. "Casual Shirt": never an interview.
@@ -195,6 +209,9 @@ def infer_occasions_for_category(category):
     words = _tokens(category)
     if words & SPORTSWEAR_WORDS:
         return {"casual", "day_outing", "college", "sports"}
+
+    if words & FESTIVE_BOTTOM_WORDS:
+        return {"wedding", "traditional"}
 
     kind = outfit_builder.kind_for(category)
     garment = outfit_builder.ROLE.get(kind) in (

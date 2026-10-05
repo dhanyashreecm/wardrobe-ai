@@ -601,7 +601,14 @@ function Wardrobe() {
                 <p className="aw-item-meta">{itemMeta(detail)}</p>
                 <ul className="aw-why" style={{ marginTop: 12 }}>
                   <li>Category: {detail.category}</li>
-                  <li>Colour: {detail.color || "not set"}</li>
+                  <li>
+                    Colour: {detail.color_display || detail.color || "not set"}
+                    {detail.color_display &&
+                      detail.color &&
+                      detail.color_display.toLowerCase() !== detail.color.toLowerCase() && (
+                        <span className="aw-hint"> ({detail.color})</span>
+                      )}
+                  </li>
                   {detail.attributes?.pattern && <li>Pattern: {detail.attributes.pattern}</li>}
                   {detail.material && <li>Material: {detail.material}</li>}
                   {detail.styling && <li>Styling: {detail.styling}</li>}
