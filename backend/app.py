@@ -1322,199 +1322,173 @@ def update_wardrobe_item(item_id):
 )
 @jwt_required()
 def find_similar_clothes():
+    """
+    Find Similar = two answers for one photo:
 
-    if not SIMILARITY_AVAILABLE:
-        return jsonify({
-            "success": False,
-            "code": "similarity_unavailable",
-            "message":
-                "Similar-clothes search isn't available on this computer. "
-                "Everything else in your wardrobe still works.",
-        }), 503
+      1. wardrobe_results - pieces the user ALREADY owns that look like
+         it (needs TensorFlow; skipped quietly on a machine without it).
+      2. shopping - live store links (Myntra, AJIO, Amazon, Flipkart,
+         Meesho, Google Shopping, plus Google Lens by picture) built
+         from the detected category/colour and the account's gender.
+         Plain URLs, so they work on every account and every device.
 
-    from backend.clothing_similarity import (
-        find_similar_in_wardrobe
-    )
+    The old DeepFashion / IndoFashion picture grids are gone: those
+    images exist only in dataset/ on one laptop, so they showed as
+    broken images everywhere else. dataset_results / indofashion_results
+    are still returned (empty) so an older frontend doesn't crash.
+    """
+    from backend import shopping_links
 
     user_email = current_user_email()
-
     account_gender = get_user_gender(user_email)
 
     image = request.files.get("image")
-
-
-    # -----------------------------------------------------
-    # Validate image
-    # -----------------------------------------------------
-
     if not image:
+        return jsonify({"success": False, "message": "No image provided"}), 400
 
-        return jsonify({
-            "success": False,
-            "message": "No image provided"
-        }), 400
-
-
-    # -----------------------------------------------------
-    # Save query image
-    # -----------------------------------------------------
-
-    filename = secure_filename(
-        image.filename
-    )
-
-    temp_folder = os.path.join(
-        BASE_UPLOAD_FOLDER,
-        "ai_queries"
-    )
-
-    os.makedirs(
-        temp_folder,
-        exist_ok=True
-    )
-
-    image_path = os.path.join(
-        temp_folder,
-        filename
-    )
-
+    temp_folder = os.path.join(BASE_UPLOAD_FOLDER, "ai_queries")
+    os.makedirs(temp_folder, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}_{secure_filename(image.filename) or 'query.jpg'}"
+    image_path = os.path.join(temp_folder, filename)
     image.save(image_path)
 
-
-    # -----------------------------------------------------
-    # AI PROCESSING
-    # -----------------------------------------------------
-
+    warnings = []
     try:
+        # ---- Clean the photo (same pipeline as uploads) ------------
+        analysis_path = image_path
+        garment_px = None
+        try:
+            cleaned = image_pipeline.process_clothing_photo(image_path)
+            if cleaned is not None:
+                analysis_path = os.path.splitext(image_path)[0] + "_clean.jpg"
+                cleaned["image"].save(analysis_path, "JPEG", quality=90)
+                if cleaned["background_removed"]:
+                    garment_px = image_pipeline.garment_pixels(cleaned["image"], cleaned["mask"])
+        except image_pipeline.ImageRejected as error:
+            return jsonify({"success": False, "message": str(error)}), 400
+        except Exception as error:  # noqa: BLE001 - never block the search
+            print(f"Similar search: photo cleaning skipped ({error})")
 
-        # -------------------------------------------------
-        # USER'S OWN WARDROBE
-        # -------------------------------------------------
+        # ---- What is it? -------------------------------------------
+        detected_category = None
+        category_confidence = None
+        if garment_classifier.is_available():
+            try:
+                prediction = garment_classifier.predict(analysis_path, account_gender)
+                if prediction:
+                    decision = category_catalog.classifier_decision(
+                        prediction, account_gender, GARMENT_CONFIDENCE_THRESHOLD
+                    )
+                    detected_category = decision.get("category") or decision.get("guess")
+                    category_confidence = prediction.get("confidence")
+            except Exception as error:  # noqa: BLE001
+                print(f"Similar search: classifier skipped ({error})")
+        if not detected_category:
+            warnings.append("category_unknown")
 
-        wardrobe_items = get_user_wardrobe(
-            user_email
-        )
-
-        wardrobe_results = (
-            find_similar_in_wardrobe(
-                image_path,
-                wardrobe_items,
-                top_k=5
+        # ---- Which colour? -----------------------------------------
+        color_analysis = None
+        try:
+            color_analysis = (
+                detect_colors_from_pixels(garment_px) if garment_px
+                else detect_colors(analysis_path)
             )
+        except Exception as error:  # noqa: BLE001
+            print(f"Similar search: colour skipped ({error})")
+        from backend.color_detection import display_name as color_display_name
+        detected_color = color_display_name((color_analysis or {}).get("primary")) or None
+        patterned = bool((color_analysis or {}).get("is_patterned"))
+
+        # ---- Public copy of the photo for Google Lens --------------
+        public_image_url = None
+        if config.storage_backend() == "cloudinary":
+            try:
+                public_image_url = storage.upload_local_file(
+                    analysis_path, user_email, kind="shop_queries"
+                )
+            except Exception as error:  # noqa: BLE001
+                print(f"Similar search: Lens upload skipped ({error})")
+
+        shopping = shopping_links.shopping_payload(
+            category=detected_category,
+            color=detected_color,
+            gender=account_gender,
+            patterned=patterned,
+            image_url=public_image_url,
         )
+        shopping["category_confidence"] = category_confidence
 
-
-        # -------------------------------------------------
-        # DEEPFASHION
-        # -------------------------------------------------
-
-        dataset_results = find_similar(
-            image_path,
-            top_k=5
-        )
-
-
-        # -------------------------------------------------
-        # CLASSIFICATION
-        # -------------------------------------------------
-
-        category_results = predict_category(
-            image_path
-        )
-
-        predicted_category = (
-            category_results.get(
-                "category"
-            )
-        )
-
-
-        # -------------------------------------------------
-        # INDOFASHION
-        #
-        # Filter by predicted category
-        # -------------------------------------------------
-
-        indofashion_results = (
-            find_similar_indofashion(
-                image_path,
-                top_k=5,
-                category=predicted_category
-            )
-        )
-
-
-        # -------------------------------------------------
-        # GENDER FILTERING
-        #
-        # wardrobe_results never needs this - it's already only the
-        # signed-in user's own items. For the two external datasets:
-        #   - IndoFashion results DO carry a real category (see
-        #     get_indofashion_category/get_category_from_path), so
-        #     they can genuinely be gender-filtered here.
-        #   - DeepFashion results carry category=None - there is no
-        #     way to recover a category (and therefore a gender)
-        #     from DeepFashion's current feature paths at all (see
-        #     get_deepfashion_category's docstring in
-        #     clothing_similarity.py). This is a real, disclosed
-        #     limitation: DeepFashion suggestions are NOT currently
-        #     gender-filtered. is_allowed_for_account() already
-        #     treats a None/unknown category as allowed, so this
-        #     just documents why dataset_results passes through
-        #     unfiltered rather than silently guessing.
-        # -------------------------------------------------
-
-        dataset_results = [
-            item for item in dataset_results
-            if is_allowed_for_account(item.get("category"), account_gender)
-        ]
-
-        indofashion_results = [
-            item for item in indofashion_results
-            if is_allowed_for_account(item.get("category"), account_gender)
-        ]
-
-
-        # -------------------------------------------------
-        # RESPONSE
-        # -------------------------------------------------
+        # ---- Already in your wardrobe? -----------------------------
+        wardrobe_results = []
+        if SIMILARITY_AVAILABLE:
+            try:
+                from backend.clothing_similarity import find_similar_in_wardrobe
+                # Both the photo as uploaded and its cleaned version:
+                # an item re-uploaded from the wardrobe then matches
+                # whichever form was stored, and comes back as 100%.
+                query_versions = [image_path]
+                if analysis_path != image_path:
+                    query_versions.append(analysis_path)
+                wardrobe_results = find_similar_in_wardrobe(
+                    query_versions, get_user_wardrobe(user_email), top_k=5
+                )
+            except Exception as error:  # noqa: BLE001
+                print(f"Similar search: wardrobe match skipped ({error})")
+                warnings.append("wardrobe_match_failed")
+        else:
+            warnings.append("wardrobe_match_unavailable")
 
         return jsonify({
-
             "success": True,
-
-            "wardrobe_results":
-                wardrobe_results,
-
-            "dataset_results":
-                dataset_results,
-
-            "indofashion_results":
-                indofashion_results,
-
-            "category_results":
-                category_results
-
+            "wardrobe_results": wardrobe_results,
+            "shopping": shopping,
+            "warnings": warnings,
+            # kept for older frontends - always empty now (see docstring)
+            "dataset_results": [],
+            "indofashion_results": [],
+            "category_results": {
+                "category": detected_category,
+                "confidence": category_confidence,
+            },
         }), 200
 
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc()
+        return jsonify({"success": False, "message": f"Search failed: {e}"}), 500
 
-    # -----------------------------------------------------
-    # ERROR
-    # -----------------------------------------------------
+    finally:
+        for path in {image_path, os.path.splitext(image_path)[0] + "_clean.jpg"}:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
-    except Exception as e:
 
-        print(
-            f"Similarity search error: {e}"
-        )
+@app.route(
+    "/api/shop/links",
+    methods=["GET"]
+)
+@jwt_required()
+def shop_links_for_query():
+    """
+    Re-builds the store links when the user corrects the category or
+    colour, or types their own search - no photo upload needed.
+    Query params: q (free text, wins if given), category, color.
+    """
+    from backend import shopping_links
 
-        return jsonify({
-
-            "success": False,
-
-            "message": str(e)
-
-        }), 500
+    account_gender = get_user_gender(current_user_email())
+    payload = shopping_links.shopping_payload(
+        category=request.args.get("category") or None,
+        color=request.args.get("color") or None,
+        gender=account_gender,
+        patterned=request.args.get("printed") in ("1", "true", "yes"),
+        image_url=request.args.get("image_url") or None,
+        query=request.args.get("q") or None,
+        min_price=request.args.get("min_price") or None,
+        max_price=request.args.get("max_price") or None,
+    )
+    return jsonify({"success": True, "shopping": payload}), 200
 
 
 # =========================================================
@@ -2436,9 +2410,16 @@ def _wardrobe_items_by_ids(user_email, item_ids):
     return found, missing
 
 
-def _person_photo_bytes(user_email):
-    """The stored photo as bytes, wherever storage put it."""
-    photo = tryon_store.get_photo(user_email)
+def _person_photo_bytes(user_email, photo=None):
+    """
+    The person photo as bytes, wherever storage put it.
+
+    `photo` is the snapshot taken when the try-on was started (see
+    start_tryon); only jobs created before that existed fall back to
+    the account's current photo.
+    """
+    if not (photo and (photo.get("image_url") or photo.get("local_path"))):
+        photo = tryon_store.get_photo(user_email)
 
     if not photo:
         raise virtual_tryon.PhotoUnsuitable(
@@ -2461,7 +2442,7 @@ def _person_photo_bytes(user_email):
         return handle.read()
 
 
-def _run_tryon_job(job_id, user_email, items, usage_day=None):
+def _run_tryon_job(job_id, user_email, items, usage_day=None, person_photo=None):
     """
     The actual generation, on a background thread.
 
@@ -2476,19 +2457,12 @@ def _run_tryon_job(job_id, user_email, items, usage_day=None):
     job stuck in RUNNING forever, so every failure ends in
     mark_failed with a sentence written for the user.
     """
-    # What the server learned, which decides what happens to the
-    # attempt in the finally block below:
-    #
-    #   "success"   an image exists      -> the attempt is spent
-    #   "confirmed" nothing was produced -> the attempt goes back now
-    #   "uncertain" we never found out   -> the attempt is held, and
-    #               tryon_usage gives it back by itself if no image
-    #               ever turns up (also what covers a backend killed
-    #               mid-generation, since this thread dies with it)
-    outcome_kind = "uncertain"
+    # "success" (a stored image exists) is the ONLY outcome that spends
+    # the attempt; anything else gives it back in the finally block.
+    outcome_kind = "failed"
 
     try:
-        person_bytes = _person_photo_bytes(user_email)
+        person_bytes = _person_photo_bytes(user_email, person_photo)
 
         def report(step, total, message):
             tryon_store.mark_running(job_id, user_email, step, total, message)
@@ -2525,51 +2499,46 @@ def _run_tryon_job(job_id, user_email, items, usage_day=None):
 
     except virtual_tryon.TryOnUnavailable as error:
         # str() is the user-safe sentence; .detail is for us and never
-        # reaches the browser.
+        # reaches the browser. Whatever the provider state - quota,
+        # cold start, timeout, broken connection - the user received no
+        # image, so the attempt is NOT spent.
         print(f"Try-on unavailable for job {job_id} ({error.state}): {error.detail}")
-        outcome_kind = (
-            "confirmed" if tryon_orchestrator.is_confirmed_failure(error.state)
-            else "uncertain"
-        )
+        outcome_kind = "failed"
         tryon_store.mark_failed(job_id, user_email, str(error), code=error.state,
-                                charged=outcome_kind == "uncertain",
-                                outcome=outcome_kind)
+                                charged=False, outcome=outcome_kind)
 
     except storage.StorageError as error:
-        # Our own fault, and confirmed - the image was made but we lost
-        # it, so the user is not charged. It does mean one GPU run was
-        # spent for nothing; that cost is the provider's allowance, not
-        # the user's ten.
+        # Our own fault - the image was made but we lost it, so the user
+        # is not charged.
         print(f"Try-on storage failed for job {job_id}: {error}")
-        outcome_kind = "confirmed"
+        outcome_kind = "failed"
         tryon_store.mark_failed(
             job_id, user_email,
             "The try-on worked but the image couldn't be saved. Please try "
-            "again - this didn't use one of your daily attempts.",
+            "again - this didn't use one of your daily try-ons.",
             charged=False, outcome=outcome_kind,
         )
 
     except Exception as error:  # noqa: BLE001 - a dead thread strands the job
-        # Unknown, so treated as uncertain rather than refunded on the
-        # spot: this could have been raised after the model finished.
-        print(f"Try-on job {job_id} failed unexpectedly: {type(error).__name__}")
-        outcome_kind = "uncertain"
+        print(f"Try-on job {job_id} failed unexpectedly: {type(error).__name__}: {error}")
+        outcome_kind = "failed"
         tryon_store.mark_failed(
             job_id, user_email,
-            "Something went wrong generating your try-on. Please try again.",
-            charged=True, outcome=outcome_kind,
+            "Something went wrong generating your try-on. Please try again "
+            "- this didn't use one of your daily try-ons.",
+            charged=False, outcome=outcome_kind,
         )
 
     finally:
-        # The attempt was reserved as a hold against this job id, so
-        # exactly one of these applies. Credited to the day it was
-        # TAKEN, so one reserved at 23:59 and returned at 00:01 goes
-        # back where it came from rather than to the new day.
+        # Only a stored, viewable image spends a try-on. Every other
+        # ending gives the reserved attempt straight back, credited to
+        # the day it was TAKEN. (The only case that reaches neither
+        # branch is a backend killed mid-generation; its hold expires by
+        # itself - see tryon_usage.release_stale_holds.)
         if outcome_kind == "success":
             tryon_usage.settle(user_email, job_id, usage_day)
-        elif outcome_kind == "confirmed":
+        else:
             tryon_usage.release(user_email, job_id, usage_day)
-        # "uncertain": the hold stays, and tryon_usage expires it.
 
 
 @app.route("/api/tryon/generate", methods=["POST"])
@@ -2752,9 +2721,19 @@ def start_tryon():
             "usage": usage,
         }), 429
 
+    # Freeze the person photo for this try-on now: replacing the photo
+    # while it generates (on this or another device) must not change
+    # which photo this result is made from.
+    current_photo = tryon_store.get_photo(user_email) or {}
+    person_photo = {
+        "image_url": current_photo.get("image_url"),
+        "local_path": current_photo.get("local_path"),
+    }
+
     created = tryon_store.create_job(
         user_email,
         [str(item.get("_id")) for item in items],
+        person_photo=person_photo,
         source=str(data.get("source") or "manual")[:40],
         occasion=str(data.get("occasion") or "")[:60],
         label=str(data.get("label") or "")[:120],
@@ -2785,7 +2764,7 @@ def start_tryon():
 
     threading.Thread(
         target=_run_tryon_job,
-        args=(job_id, user_email, items, usage["day"]),
+        args=(job_id, user_email, items, usage["day"], person_photo),
         daemon=True,
         name=f"tryon-{job_id[:8]}",
     ).start()
@@ -2796,7 +2775,7 @@ def start_tryon():
         "total_steps": len(passes),
         # Sent up front so the interface can warn that a full outfit
         # takes two generations before the user starts waiting.
-        "estimated_seconds": 25 * len(passes),
+        "estimated_seconds": 80 * len(passes),
         "usage": usage,
         "not_applied": [
             {

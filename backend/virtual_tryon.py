@@ -1284,11 +1284,55 @@ def _run_pass(engine, person_bytes, garment_bytes, model_category,
         sleep(POLL_SECONDS)
 
     try:
-        return engine.result(handle)
+        data = engine.result(handle)
     except TryOnUnavailable:
         raise
     except Exception as error:  # noqa: BLE001
         raise _unavailable(error, f"unwrapped {type(error).__name__} from {engine.name}.result")
+
+    return validate_result_image(data, engine.name)
+
+
+# Smallest edge a real FASHN result can have (it renders at 576x864).
+MIN_RESULT_EDGE = 64
+
+
+def validate_result_image(data, source=""):
+    """
+    The provider's bytes must decode as a real image of sensible size.
+    Anything else - an HTML error page, a truncated download, a blank
+    1x1 - is an unusable response: raised as a failure so the user's
+    daily try-on is NOT spent on it.
+    """
+    from PIL import Image
+
+    problem = ""
+    if not data:
+        problem = "empty result"
+    else:
+        try:
+            image = Image.open(io.BytesIO(data))
+            image.verify()
+            image = Image.open(io.BytesIO(data))
+            width, height = image.size
+            if min(width, height) < MIN_RESULT_EDGE:
+                problem = f"result too small ({width}x{height})"
+            else:
+                extrema = image.convert("L").getextrema()
+                if extrema[0] == extrema[1]:
+                    problem = "result is a single flat colour"
+        except Exception as error:  # noqa: BLE001
+            problem = f"result is not an image ({type(error).__name__})"
+
+    if problem:
+        raise TryOnUnavailable(
+            "The try-on service returned an unusable image. Please try again "
+            "- this didn't use one of your daily try-ons.",
+            detail=f"{problem} from {source}",
+            state=UNKNOWN_ERROR,
+        )
+
+    return data
 
 
 def generate_outfit(person_bytes, items, on_progress=None, engine=None):

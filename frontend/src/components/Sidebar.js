@@ -12,7 +12,7 @@ const NAV_ITEMS = [
   { to: "/recommend", label: "Outfit Recommendations", Icon: SparkleIcon },
   { to: "/trip", label: "Trip Planner", Icon: PlaneIcon },
   { to: "/tryon", label: "Virtual Try-On", Icon: TryOnIcon },
-  { to: "/similar", label: "Find Similar Clothes", Icon: SearchIcon },
+  { to: "/similar", label: "Find Similar & Shop", Icon: SearchIcon },
 ];
 
 function Sidebar() {

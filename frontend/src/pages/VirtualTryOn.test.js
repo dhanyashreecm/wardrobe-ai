@@ -428,34 +428,41 @@ const withUsage = (extra) => ({
   photo_url: 'https://res.cloudinary.com/x/me.jpg',
   has_photo: true,
   usage: {
-    used: 3, limit: 10, remaining: 7, successful: 3, in_progress: 0,
-    day: '2026-10-01', resets_at: '2026-10-01T18:30:00Z',
+    used: 1, limit: 5, remaining: 4, successful: 1, in_progress: 0,
+    day: '2026-10-05', resets_at: '2026-10-05T18:30:00Z',
     ...extra,
   },
 });
 
-test('the counter shows successful generations out of the daily limit', async () => {
+test('the counter shows try-ons remaining today out of five', async () => {
   mockApi({ capability: withUsage() });
   renderPage();
-  const line = await screen.findByText(/try-ons created today/i);
-  expect(line).toHaveTextContent('3/10');
-  expect(line).toHaveTextContent('7 remaining');
+  const line = await screen.findByText(/try-ons remaining today/i);
+  expect(line).toHaveTextContent('4/5');
 });
 
-test('a generation still running is shown as in progress, not as an image', async () => {
-  mockApi({ capability: withUsage({ used: 4, remaining: 6, successful: 3, in_progress: 1 }) });
+test('a fresh account starts at 5/5', async () => {
+  mockApi({ capability: withUsage({ used: 0, remaining: 5, successful: 0 }) });
   renderPage();
-  const line = await screen.findByText(/try-ons created today/i);
-  // Three images exist; the fourth is not one yet.
-  expect(line).toHaveTextContent('3/10');
-  expect(line).toHaveTextContent('1 in progress');
+  const line = await screen.findByText(/try-ons remaining today/i);
+  expect(line).toHaveTextContent('5/5');
 });
 
-test('using the whole allowance disables Try On and says so', async () => {
-  mockApi({ capability: withUsage({ used: 10, remaining: 0, successful: 10 }) });
+test('a generation still running does not lower the remaining figure', async () => {
+  mockApi({ capability: withUsage({ remaining: 4, successful: 1, in_progress: 1 }) });
+  renderPage();
+  const line = await screen.findByText(/try-ons remaining today/i);
+  expect(line).toHaveTextContent('4/5');
+  expect(line).toHaveTextContent('being created');
+});
+
+test('using the whole allowance disables Try On and says it resets tomorrow', async () => {
+  mockApi({ capability: withUsage({ used: 5, remaining: 0, successful: 5 }) });
   renderPage();
   fireEvent.click(await screen.findByRole('button', { name: /white shirt/i }));
-  expect(await screen.findByText(/created all 10 of today's virtual try-ons/i)).toBeInTheDocument();
+  expect(await screen.findByText(/try-ons remaining today/i)).toHaveTextContent('0/5');
+  expect(await screen.findByText(/reached today's limit of 5 virtual try-ons/i)).toBeInTheDocument();
+  expect(screen.getByText(/resets to 5 at the start of the next day/i)).toBeInTheDocument();
   expect(tryOnButton()).toBeDisabled();
 });
 
@@ -464,7 +471,7 @@ test('a failure that cost nothing says so instead of implying the allowance is g
     capability: withUsage(),
     status: [{
       job_id: 'jf', status: 'failed', error: 'The try-on service is starting up.',
-      error_code: 'PROVIDER_SLEEPING', attempt_charged: false, outcome: 'confirmed',
+      error_code: 'PROVIDER_SLEEPING', attempt_charged: false, outcome: 'failed',
     }],
   });
   axios.post.mockResolvedValue({ data: { success: true, job_id: 'jf', total_steps: 1, not_applied: [] } });
@@ -473,15 +480,15 @@ test('a failure that cost nothing says so instead of implying the allowance is g
   fireEvent.click(await screen.findByRole('button', { name: /white shirt/i }));
   await act(async () => { fireEvent.click(tryOnButton()); });
   await act(async () => { jest.advanceTimersByTime(2100); });
-  expect(await screen.findByText(/didn't use one of your daily attempts/i)).toBeInTheDocument();
+  expect(await screen.findByText(/didn't use one of your daily try-ons/i)).toBeInTheDocument();
 });
 
-test('an unconfirmed outcome says the attempt is on hold, not spent', async () => {
+test('a timeout also costs nothing', async () => {
   mockApi({
     capability: withUsage(),
     status: [{
-      job_id: 'ju', status: 'failed', error: 'The try-on service was too slow to respond.',
-      error_code: 'TIMEOUT', attempt_charged: true, outcome: 'uncertain',
+      job_id: 'ju', status: 'failed', error: 'The try-on took too long and was stopped.',
+      error_code: 'TIMEOUT', attempt_charged: false, outcome: 'failed',
     }],
   });
   axios.post.mockResolvedValue({ data: { success: true, job_id: 'ju', total_steps: 1, not_applied: [] } });
@@ -490,7 +497,7 @@ test('an unconfirmed outcome says the attempt is on hold, not spent', async () =
   fireEvent.click(await screen.findByRole('button', { name: /white shirt/i }));
   await act(async () => { fireEvent.click(tryOnButton()); });
   await act(async () => { jest.advanceTimersByTime(2100); });
-  expect(await screen.findByText(/on hold/i)).toBeInTheDocument();
+  expect(await screen.findByText(/didn't use one of your daily try-ons/i)).toBeInTheDocument();
 });
 
 test('a repeated submission reuses one request id so it cannot be charged twice', async () => {
@@ -509,4 +516,127 @@ test('a repeated submission reuses one request id so it cannot be charged twice'
   expect(tryOnButton()).toBeDisabled();
   await act(async () => { fireEvent.click(tryOnButton()); });
   expect(axios.post).toHaveBeenCalledTimes(1);
+});
+
+// ---------------- camera (Take Photo) ----------------
+
+function mockCamera({ fail } = {}) {
+  const track = { stop: jest.fn() };
+  const stream = { getTracks: () => [track] };
+  Object.defineProperty(window, 'isSecureContext', { value: true, configurable: true });
+  Object.defineProperty(global.navigator, 'mediaDevices', {
+    configurable: true,
+    value: {
+      getUserMedia: fail
+        ? jest.fn(() => Promise.reject(Object.assign(new Error('denied'), { name: fail })))
+        : jest.fn(() => Promise.resolve(stream)),
+    },
+  });
+  // jsdom has no real video/canvas: give the video a size and make the
+  // canvas hand back a JPEG blob.
+  Object.defineProperty(HTMLMediaElement.prototype, 'play', { configurable: true, value: () => Promise.resolve() });
+  Object.defineProperty(HTMLVideoElement.prototype, 'videoWidth', { configurable: true, get: () => 1080 });
+  Object.defineProperty(HTMLVideoElement.prototype, 'videoHeight', { configurable: true, get: () => 1920 });
+  HTMLCanvasElement.prototype.getContext = () => ({ drawImage: jest.fn() });
+  HTMLCanvasElement.prototype.toBlob = function toBlob(cb, type) {
+    cb(new Blob([new Uint8Array(5000)], { type }));
+  };
+  return { track };
+}
+
+async function openCameraAndCapture() {
+  fireEvent.click(await screen.findByRole('button', { name: /take photo/i }));
+  await screen.findByTestId('camera-video');
+  fireEvent.click(screen.getByLabelText(/5-second timer/i)); // instant capture in tests
+  await waitFor(() => expect(screen.getByRole('button', { name: /capture photo/i })).not.toBeDisabled());
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: /capture photo/i })); });
+  return screen.findByTestId('camera-captured');
+}
+
+test('both Take Photo and Upload Photo are offered', async () => {
+  mockApi();
+  renderPage();
+  expect(await screen.findByRole('button', { name: /take photo/i })).toBeInTheDocument();
+  expect(screen.getByText('Upload Photo')).toBeInTheDocument();
+  expect(screen.getByText(/for the best try-on/i)).toBeInTheDocument();
+});
+
+test('TEST F + H: capturing (and retaking) sends nothing to the server', async () => {
+  mockApi();
+  mockCamera();
+  renderPage();
+  await openCameraAndCapture();
+  fireEvent.click(screen.getByRole('button', { name: /retake/i }));
+  await screen.findByTestId('camera-video');
+  await waitFor(() => expect(screen.getByRole('button', { name: /capture photo/i })).not.toBeDisabled());
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: /capture photo/i })); });
+  await screen.findByTestId('camera-captured');
+  // no upload, no try-on, and the captured image is NOT the person photo
+  expect(axios.post).not.toHaveBeenCalled();
+  expect(screen.queryByTestId('photo-preview')).not.toBeInTheDocument();
+});
+
+test('TEST B: Use This Photo sends the capture through the normal photo upload', async () => {
+  mockApi();
+  mockCamera();
+  axios.post.mockResolvedValue({ data: { success: true, photo_url: 'https://res.cloudinary.com/x/cam.jpg' } });
+  renderPage();
+  await openCameraAndCapture();
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: /use this photo/i })); });
+  const preview = await screen.findByTestId('photo-preview');
+  await waitFor(() => expect(preview).toHaveAttribute('src', 'https://res.cloudinary.com/x/cam.jpg'));
+  expect(axios.post).toHaveBeenCalledTimes(1);
+  const [url, body] = axios.post.mock.calls[0];
+  expect(url).toMatch(/\/api\/tryon\/photo$/);
+  const sent = body.get('image');
+  expect(sent.type).toBe('image/jpeg');
+  expect(sent.name).toMatch(/^camera-\d+\.jpg$/);
+});
+
+test('TEST G: camera permission denied falls back to upload', async () => {
+  mockApi();
+  mockCamera({ fail: 'NotAllowedError' });
+  renderPage();
+  fireEvent.click(await screen.findByRole('button', { name: /take photo/i }));
+  expect(await screen.findByTestId('camera-error')).toHaveTextContent(/permission was blocked/i);
+  fireEvent.click(screen.getByRole('button', { name: /upload a photo instead/i }));
+  expect(await screen.findByText('Upload Photo')).toBeInTheDocument();
+  expect(screen.getByTestId('camera-note')).toBeInTheDocument();
+  axios.post.mockResolvedValue({ data: { success: true, photo_url: 'https://res.cloudinary.com/x/up.jpg' } });
+  const file = new File(['png'], 'me.png', { type: 'image/png' });
+  await act(async () => { fireEvent.change(screen.getByTestId('photo-input'), { target: { files: [file] } }); });
+  expect(axios.post.mock.calls[0][1].get('image')).toBe(file);
+});
+
+test('no camera API at all shows the upload fallback message', async () => {
+  mockApi();
+  Object.defineProperty(global.navigator, 'mediaDevices', { configurable: true, value: undefined });
+  renderPage();
+  fireEvent.click(await screen.findByRole('button', { name: /take photo/i }));
+  expect(await screen.findByTestId('camera-error')).toHaveTextContent(/upload a photo instead/i);
+});
+
+test('TEST D/E: Recent Try-Ons show each job\'s own result, and Compare shows that job\'s own person photo', async () => {
+  mockApi({
+    capability: { ...CAPABILITY, has_photo: true, photo_url: 'https://res.cloudinary.com/x/personB.jpg' },
+    results: [
+      { job_id: 'j3', status: 'done', image_url: 'https://res.cloudinary.com/x/resultC.jpg', person_url: 'https://res.cloudinary.com/x/personB.jpg', label: 'Saree look' },
+      { job_id: 'j2', status: 'done', image_url: 'https://res.cloudinary.com/x/resultB.jpg', person_url: 'https://res.cloudinary.com/x/personA.jpg', label: 'White dress' },
+      { job_id: 'j1', status: 'done', image_url: 'https://res.cloudinary.com/x/resultA.jpg', person_url: 'https://res.cloudinary.com/x/personA.jpg', label: 'Black top' },
+    ],
+  });
+  renderPage();
+  const cards = await screen.findAllByRole('img', { name: /saree look|white dress|black top/i });
+  expect(cards.map((img) => img.getAttribute('src'))).toEqual([
+    'https://res.cloudinary.com/x/resultC.jpg',
+    'https://res.cloudinary.com/x/resultB.jpg',
+    'https://res.cloudinary.com/x/resultA.jpg',
+  ]);
+  // open the OLD try-on #2 and compare: it must show person photo A,
+  // not the current photo B and not any generated image
+  fireEvent.click(cards[1]);
+  fireEvent.click(await screen.findByRole('button', { name: /compare with original/i }));
+  expect(screen.getByRole('img', { name: /your original photo/i })).toHaveAttribute('src', 'https://res.cloudinary.com/x/personA.jpg');
+  // the person photo shown in step 1 is still the current one (B)
+  expect(screen.getByTestId('photo-preview')).toHaveAttribute('src', 'https://res.cloudinary.com/x/personB.jpg');
 });

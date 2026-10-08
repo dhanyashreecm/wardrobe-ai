@@ -371,19 +371,21 @@ except ValueError:
     TRYON_MAX_UPLOAD_MB = 8
 
 
-# How many try-ons ONE ACCOUNT may generate per day (see
-# tryon_usage.py). This is a fairness limit inside this application,
-# not the GPU allowance: the free Hugging Face Space has its own daily
-# quota belonging to the Space's account, and raising the number here
-# buys no extra GPU time - it only changes how much of the shared
-# allowance a single user may spend before others get a turn.
+# How many SUCCESSFUL try-ons ONE ACCOUNT may generate per calendar day
+# (see tryon_usage.py). Counted per account (JWT identity), never per
+# device or browser, and only once an image has actually been produced
+# and stored - a failed generation never uses one up.
+#
+# This is the application's limit, NOT the GPU provider's: whether the
+# images can actually be produced depends on the provider's capacity
+# (see docs/VIRTUAL_TRYON_COST_AND_PROVIDER.md).
 try:
-    TRYON_DAILY_LIMIT = int(_get("TRYON_DAILY_LIMIT", "10") or "10")
+    TRYON_DAILY_LIMIT = int(_get("TRYON_DAILY_LIMIT", "5") or "5")
 except ValueError:
-    TRYON_DAILY_LIMIT = 10
+    TRYON_DAILY_LIMIT = 5
 
 if TRYON_DAILY_LIMIT < 1:
-    TRYON_DAILY_LIMIT = 10
+    TRYON_DAILY_LIMIT = 5
 
 # Midnight in WHICH timezone the daily count resets, as a fixed offset
 # from UTC. Default +5.5 = India.
@@ -419,26 +421,22 @@ except ValueError:
 if TRYON_MAX_CONCURRENT_JOBS < 1:
     TRYON_MAX_CONCURRENT_JOBS = 1
 
-# How long an attempt with an UNCERTAIN outcome stays held before it is
-# given back automatically (see tryon_usage.py).
-#
-# "Uncertain" means the server never learned whether the model produced
-# an image: the request timed out, the connection broke, or the backend
-# was killed mid-generation. The image may still arrive at the provider
-# end, so the attempt is not refunded straight away - that would let a
-# user collect pictures while paying for none of them. It is not kept
-# for ever either. An hour is far longer than any generation can take
-# (TRYON_TIMEOUT_SECONDS is 300 at most), so by the time the hold
-# expires the answer is in: nothing came, and the attempt goes back.
+# Safety net for an attempt whose job thread never reported back -
+# in practice only a backend killed or restarted mid-generation. Every
+# outcome the backend DOES observe (success excepted) gives the attempt
+# back immediately, timeouts included, because the user received no
+# image. A hold left by a dead thread is returned after this many
+# seconds; 15 minutes is three times the longest a generation may run
+# (TRYON_TIMEOUT_SECONDS, 300).
 try:
     TRYON_UNCERTAIN_HOLD_SECONDS = int(
-        _get("TRYON_UNCERTAIN_HOLD_SECONDS", "3600") or "3600"
+        _get("TRYON_UNCERTAIN_HOLD_SECONDS", "900") or "900"
     )
 except ValueError:
-    TRYON_UNCERTAIN_HOLD_SECONDS = 3600
+    TRYON_UNCERTAIN_HOLD_SECONDS = 900
 
 if TRYON_UNCERTAIN_HOLD_SECONDS < 60:
-    TRYON_UNCERTAIN_HOLD_SECONDS = 3600
+    TRYON_UNCERTAIN_HOLD_SECONDS = 900
 
 
 def tryon_host_is_url():

@@ -444,177 +444,227 @@ def find_similar(
 # ============================================================
 # COMPARE AGAINST USER'S WARDROBE
 # ============================================================
+#
+# Two different questions, answered separately:
+#
+#   * "Is this the SAME photo as one of my items?" - a pixel
+#     fingerprint (32x32 thumbnail). It survives resizing, JPEG
+#     re-compression and Cloudinary's re-encoding, so an item
+#     uploaded again comes back as exactly 100%.
+#
+#   * "Does it LOOK like one of my items?" - MobileNetV2 features
+#     (cosine similarity). These never reach 1.0 for a re-encoded
+#     copy, and the upload flow stores a background-removed version,
+#     so on its own this put an exact re-upload at ~89%.
+#
+# Both the photo as uploaded AND its cleaned (background-removed)
+# version are compared, against both the stored image and the
+# untouched original kept at upload time; the best pairing wins.
+# ============================================================
+
+# "Same item" is decided by three independent checks; any one is
+# enough (see find_similar_in_wardrobe):
+#
+#   1. Keypoint match (ORB + RANSAC). Finds the same visual details in
+#      both pictures whatever the size, crop, white padding the upload
+#      step added, or JPEG/Cloudinary re-encoding. On the real wardrobe
+#      photos: the same item scored 57-745 inliers, different items 24
+#      or less (one fluke of 45 - a skirt vs boots - which the
+#      appearance guard below rejects).
+#   2. Pixel thumbnail - catches plain, texture-less garments, where
+#      keypoints are scarce, when the photo is otherwise unchanged.
+#   3. Appearance features almost identical (MobileNetV2 cosine).
+EXACT_MIN_KEYPOINT_INLIERS = 40
+EXACT_KEYPOINT_MIN_FEATURE_SIMILARITY = 0.80
+FINGERPRINT_SIZE = 32
+EXACT_MAX_PIXEL_DIFFERENCE = 0.012
+EXACT_PIXEL_MIN_FEATURE_SIMILARITY = 0.85
+EXACT_FEATURE_SIMILARITY = 0.97
+# Every rule above is colour-blind (keypoints work on grey, and the
+# appearance features barely see hue), so the same T-shirt print in
+# red/blue/green/black matched itself. The garment's centre colour must
+# also agree: same-item pairs differed by <= 0.075 on the wardrobe
+# photos, different colours of one design by >= 0.24.
+EXACT_MAX_COLOUR_DIFFERENCE = 0.15
+
+
+def image_fingerprint(image_path):
+    """
+    {"thumb": 32x32 RGB vector, "kp": (keypoints, descriptors)} for a
+    photo, or None if it cannot be read.
+    """
+    from PIL import Image, ImageOps
+    import cv2
+
+    try:
+        with Image.open(image_path) as img:
+            img = ImageOps.exif_transpose(img).convert("RGB")
+            thumb = img.resize((FINGERPRINT_SIZE, FINGERPRINT_SIZE), Image.LANCZOS)
+            centre = np.asarray(img.resize((64, 64), Image.LANCZOS), dtype=np.float32)
+            centre = np.median(centre[19:45, 19:45].reshape(-1, 3), axis=0) / 255.0
+            gray = img.convert("L")
+            gray.thumbnail((512, 512), Image.LANCZOS)
+            keypoints, descriptors = _orb().detectAndCompute(np.asarray(gray), None)
+    except Exception as error:  # noqa: BLE001
+        print(f"Fingerprint skipped for {image_path}: {error}")
+        return None
+    return {
+        "thumb": np.asarray(thumb, dtype=np.float32).flatten() / 255.0,
+        "kp": (keypoints, descriptors),
+        "centre": centre,
+    }
+
+
+_ORB = None
+
+
+def _orb():
+    global _ORB
+    if _ORB is None:
+        import cv2
+        _ORB = cv2.ORB_create(nfeatures=1000)
+    return _ORB
+
+
+def keypoint_inliers(a, b):
+    """Geometrically consistent keypoint matches between two fingerprints."""
+    import cv2
+
+    if a is None or b is None:
+        return 0
+    (ka, da), (kb, db) = a["kp"], b["kp"]
+    if da is None or db is None or len(ka) < 8 or len(kb) < 8:
+        return 0
+    matches = cv2.BFMatcher(cv2.NORM_HAMMING).knnMatch(da, db, k=2)
+    good = [
+        pair[0] for pair in matches
+        if len(pair) == 2 and pair[0].distance < 0.75 * pair[1].distance
+    ]
+    if len(good) < 8:
+        return 0
+    src = np.float32([ka[m.queryIdx].pt for m in good])
+    dst = np.float32([kb[m.trainIdx].pt for m in good])
+    _, mask = cv2.findHomography(src, dst, cv2.RANSAC, 5.0)
+    return int(mask.sum()) if mask is not None else 0
+
+
+def fingerprint_distance(a, b):
+    """Mean absolute thumbnail difference (0 = identical), or None."""
+    if a is None or b is None:
+        return None
+    return float(np.abs(a["thumb"] - b["thumb"]).mean())
+
+
+def is_same_item(query_print, item_print, feature_similarity):
+    """True when two photos show the same wardrobe item (see above)."""
+    if query_print is None or item_print is None:
+        return False
+    colour_gap = float(np.abs(query_print["centre"] - item_print["centre"]).max())
+    if colour_gap > EXACT_MAX_COLOUR_DIFFERENCE:
+        return False
+    if feature_similarity >= EXACT_FEATURE_SIMILARITY:
+        return True
+    distance = fingerprint_distance(query_print, item_print)
+    if (
+        distance is not None
+        and distance <= EXACT_MAX_PIXEL_DIFFERENCE
+        and feature_similarity >= EXACT_PIXEL_MIN_FEATURE_SIMILARITY
+    ):
+        return True
+    return (
+        feature_similarity >= EXACT_KEYPOINT_MIN_FEATURE_SIMILARITY
+        and keypoint_inliers(query_print, item_print) >= EXACT_MIN_KEYPOINT_INLIERS
+    )
+
+
+def _local_path(image_url):
+    """A readable file for a stored image reference, or None."""
+    if not image_url:
+        return None
+    if image_url.startswith(("http://", "https://")):
+        cached = storage.local_copy_of(image_url)
+        return Path(cached) if cached else None
+    if image_url.startswith("/api/uploads/"):
+        path = BASE_DIR / "backend" / "uploads" / image_url.replace("/api/uploads/", "", 1)
+    else:
+        path = Path(image_url)
+        if not path.is_absolute():
+            path = BASE_DIR / "backend" / path
+    return path if path.exists() else None
+
+
+def _original_of(item):
+    return (
+        ((item.get("attributes") or {}).get("image_processing") or {})
+        .get("original_image")
+    )
+
 
 def find_similar_in_wardrobe(
     query_image_path,
     wardrobe_items,
     top_k=5
 ):
-
     """
-    Compare the uploaded image against images
-    already stored in the user's wardrobe.
-    """
+    Compare an uploaded photo against the user's wardrobe.
 
-    query_feature = extract_feature(
-        query_image_path
+    query_image_path: one path, or a list of versions of the SAME photo
+    (e.g. [as uploaded, background removed]).
+
+    Each result carries "similarity" (0-1) and "exact_match" (True when
+    it is the same picture as that wardrobe item - similarity is then
+    exactly 1.0).
+    """
+    query_paths = (
+        [query_image_path] if isinstance(query_image_path, (str, Path))
+        else [p for p in query_image_path if p]
     )
+    query_features = [extract_feature(str(p)) for p in query_paths]
+    query_prints = [image_fingerprint(p) for p in query_paths]
 
     results = []
 
-
     for item in wardrobe_items:
-
-        image_url = item.get(
-            "image_path"
-        )
-
+        image_url = item.get("image_path")
         if not image_url:
             continue
 
-
-        # ----------------------------------------------------
-        # Convert API URL to local path
-        #
-        # Three shapes have to resolve to a readable FILE here,
-        # because extract_feature() below opens a path, not a URL:
-        #
-        #   1. "https://res.cloudinary.com/..." - an item uploaded
-        #      since images moved to shared cloud storage. Fetched
-        #      once and cached on this machine (storage.local_copy_of).
-        #      Without this branch every such item would fail the
-        #      .exists() check below and silently drop out of the
-        #      results, making "find similar in my wardrobe" look
-        #      broken for anything uploaded after the move.
-        #   2. "/api/uploads/..." - an older item still on this disk.
-        #   3. a bare relative path - oldest records.
-        # ----------------------------------------------------
-
-        if image_url.startswith(("http://", "https://")):
-
-            cached = storage.local_copy_of(image_url)
-
-            if not cached:
-                # Already logged by local_copy_of - skip this one item
-                # rather than failing the whole search.
-                continue
-
-            wardrobe_image_path = Path(cached)
-
-        elif image_url.startswith(
-            "/api/uploads/"
-        ):
-
-            relative_path = (
-                image_url.replace(
-                    "/api/uploads/",
-                    "",
-                    1
-                )
-            )
-
-            wardrobe_image_path = (
-                BASE_DIR
-                / "backend"
-                / "uploads"
-                / relative_path
-            )
-
-        else:
-
-            wardrobe_image_path = Path(
-                image_url
-            )
-
-            if not wardrobe_image_path.is_absolute():
-
-                wardrobe_image_path = (
-                    BASE_DIR
-                    / "backend"
-                    / wardrobe_image_path
-                )
-
-
-        # ----------------------------------------------------
-        # Check image
-        # ----------------------------------------------------
-
-        if not wardrobe_image_path.exists():
-
-            print(
-                "Wardrobe image not found:",
-                wardrobe_image_path
-            )
-
+        main_path = _local_path(image_url)
+        if main_path is None:
+            print("Wardrobe image not found:", image_url)
             continue
 
-
-        # ----------------------------------------------------
-        # Extract feature
-        # ----------------------------------------------------
-
         try:
+            item_feature = extract_feature(str(main_path))
+            similarity = max(float(np.dot(q, item_feature)) for q in query_features)
 
-            wardrobe_feature = (
-                extract_feature(
-                    str(
-                        wardrobe_image_path
-                    )
-                )
+            # Same item? Compare every version of the query photo with
+            # the stored picture and the original photo kept at upload.
+            item_prints = [image_fingerprint(main_path)]
+            original_path = _local_path(_original_of(item))
+            if original_path is not None:
+                item_prints.append(image_fingerprint(original_path))
+
+            exact = any(
+                is_same_item(q, i, similarity)
+                for q in query_prints for i in item_prints
             )
-
-
-            similarity = float(
-                np.dot(
-                    query_feature,
-                    wardrobe_feature
-                )
-            )
-
 
             results.append({
-
-                "item_id": item.get(
-                    "_id"
-                ),
-
+                "item_id": item.get("_id"),
                 "image": image_url,
-
-                "category": item.get(
-                    "category"
-                ),
-
-                "color": item.get(
-                    "color"
-                ),
-
-                "occasion": item.get(
-                    "occasion"
-                ),
-
-                "similarity": similarity
-
+                "category": item.get("category"),
+                "color": item.get("color"),
+                "occasion": item.get("occasion"),
+                "similarity": 1.0 if exact else min(similarity, 0.99),
+                "exact_match": exact,
             })
 
-
-        except Exception as e:
-
-            print(
-                "Could not process wardrobe "
-                f"image {wardrobe_image_path}: {e}"
-            )
-
-
-    # --------------------------------------------------------
-    # Sort
-    # --------------------------------------------------------
+        except Exception as e:  # noqa: BLE001
+            print(f"Could not process wardrobe image {main_path}: {e}")
 
     results.sort(
-        key=lambda x: x["similarity"],
+        key=lambda x: (x["exact_match"], x["similarity"]),
         reverse=True
     )
-
-
-    return results[
-        :top_k
-    ]
+    return results[:top_k]

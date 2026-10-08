@@ -124,7 +124,7 @@ def new_job_id():
 
 
 def create_job(user_email, item_ids, source="manual", occasion="", label="",
-               job_id=None, usage_day=None, request_id=None):
+               job_id=None, usage_day=None, request_id=None, person_photo=None):
     """
     Opens a job in the PENDING state and returns its id.
 
@@ -153,6 +153,12 @@ def create_job(user_email, item_ids, source="manual", occasion="", label="",
         "step": 0,
         "total_steps": 0,
         "item_ids": [str(identifier) for identifier in item_ids],
+        # The person photo THIS try-on uses, frozen when it was started.
+        # The generation reads exactly this image - never "whatever the
+        # account's photo is by the time the worker runs" - and Recent
+        # Try-Ons can show each result next to the photo it came from.
+        "person_photo_url": (person_photo or {}).get("image_url"),
+        "person_photo_path": (person_photo or {}).get("local_path"),
         "source": source,
         "occasion": occasion,
         "label": label,
@@ -327,13 +333,14 @@ def _mark_stale_if_abandoned(job):
     mark_failed(
         job["job_id"], job["user_email"],
         "This try-on was interrupted - the server restarted while it was "
-        "running. Please start it again.",
-        # Uncertain, not confirmed: the model may have finished the
-        # picture after this server stopped listening. The attempt is
-        # still held, and tryon_usage returns it by itself once the
-        # hold is older than any generation could be.
-        charged=True, outcome="uncertain",
+        "running. Please start it again - this didn't use one of your "
+        "daily try-ons.",
+        # No image reached the user, so the attempt is given back now.
+        charged=False, outcome="failed",
     )
+
+    from backend import tryon_usage  # local import: tryon_usage imports db only
+    tryon_usage.release(job["user_email"], job["job_id"], job.get("usage_day"))
 
     return results_collection.find_one(
         {"job_id": job["job_id"], "user_email": job["user_email"]}
@@ -405,6 +412,7 @@ def public_view(document):
         "step": document.get("step", 0),
         "total_steps": document.get("total_steps", 0),
         "image_url": document.get("image_url"),
+        "person_url": document.get("person_photo_url"),
         "worn": document.get("worn", []),
         "not_applied": document.get("not_applied", []),
         "passes": document.get("passes", 0),

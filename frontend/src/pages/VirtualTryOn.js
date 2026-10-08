@@ -4,6 +4,7 @@ import axios from "axios";
 
 import Layout from "../components/Layout";
 import PageHeader from "../components/PageHeader";
+import CameraCapture from "../components/CameraCapture";
 import { API_URL, assetUrl } from "../config";
 import "../styles/aw-v2.css";
 import "../styles/tryon.css";
@@ -89,7 +90,13 @@ function VirtualTryOn() {
   const [selected, setSelected] = useState([]);
   const [incomingNotes, setIncomingNotes] = useState([]);
 
+  // personImage: the photo the NEXT try-on will use. Only ever set from
+  // the server's answer to an upload (file or camera) - a generated
+  // result (`job` / history) is never written into it.
   const [photoUrl, setPhotoUrl] = useState("");
+  // Camera: open/closed, and why it fell back to upload (if it did).
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraNote, setCameraNote] = useState("");
   const [localPreview, setLocalPreview] = useState("");
   const [uploading, setUploading] = useState(false);
   const [photoProblems, setPhotoProblems] = useState([]);
@@ -225,10 +232,8 @@ function VirtualTryOn() {
   const usage = capability?.usage || null;
   const attemptsLeft = usage ? usage.remaining : null;
   const outOfAttempts = usage ? usage.remaining <= 0 : false;
-  // What the limit is really counting: images the user can open. A
-  // generation still running is shown separately rather than folded in,
-  // so the headline figure never claims an image that doesn't exist yet.
-  const successful = usage ? usage.successful ?? usage.used : null;
+  // "remaining" counts successful images only, so a generation that is
+  // still running (or fails) never lowers the figure on screen.
   const inProgress = usage ? usage.in_progress || 0 : 0;
 
   const resetsAt = usage?.resets_at
@@ -247,13 +252,7 @@ function VirtualTryOn() {
   const allowanceNote = (() => {
     if (job?.status !== "failed") return "";
     if (job.attempt_charged === false) {
-      return "This didn't use one of your daily attempts.";
-    }
-    if (job.outcome === "uncertain") {
-      return (
-        "We couldn't confirm whether the image was created, so this " +
-        "attempt is on hold. It goes back automatically if nothing arrives."
-      );
+      return "This didn't use one of your daily try-ons.";
     }
     return "";
   })();
@@ -276,6 +275,12 @@ function VirtualTryOn() {
     const file = event.target.files && event.target.files[0];
     if (fileInput.current) fileInput.current.value = "";
     if (!file) return;
+    await sendPersonPhoto(file);
+  };
+
+  // The one path a person photo takes to the server - a chosen file and
+  // a camera capture ("Use This Photo") both arrive here.
+  const sendPersonPhoto = async (file) => {
     const headers = authHeaders();
     if (!headers) return navigate("/login");
 
@@ -313,6 +318,17 @@ function VirtualTryOn() {
         setLocalPreview("");
       }
     }
+  };
+
+  const useCameraPhoto = async (file) => {
+    setCameraOpen(false);
+    await sendPersonPhoto(file);
+  };
+
+  const openCamera = () => {
+    setCameraNote("");
+    setPhotoProblems([]);
+    setCameraOpen(true);
   };
 
   const removePhoto = async () => {
@@ -639,10 +655,20 @@ function VirtualTryOn() {
         <section className="aw-panel tryon-step" aria-labelledby="tryon-step-1-title">
           <h3 id="tryon-step-1-title"><span className="tryon-num">1</span> Your Photo</h3>
 
-          {photoUrl || localPreview ? (
+          {cameraOpen ? (
+            <CameraCapture
+              onUse={useCameraPhoto}
+              onCancel={() => setCameraOpen(false)}
+              onUnavailable={(message) => setCameraNote(message)}
+              disabled={uploading || busy}
+            />
+          ) : photoUrl || localPreview ? (
             <div className="tryon-photo">
               <img src={localPreview || assetUrl(photoUrl)} alt="You, for the try-on" data-testid="photo-preview" />
               <div className="aw-actions-row">
+                <button type="button" className="aw-btn aw-btn-soft aw-btn-sm" onClick={openCamera} disabled={uploading || busy}>
+                  📷 Take new photo
+                </button>
                 <button type="button" className="aw-btn aw-btn-soft aw-btn-sm" onClick={choosePhoto} disabled={uploading || busy}>
                   Replace
                 </button>
@@ -653,12 +679,43 @@ function VirtualTryOn() {
               {uploading && <div className="aw-progress"><span className="aw-spinner" /> Checking your photo…</div>}
             </div>
           ) : (
-            <button type="button" className="tryon-drop" onClick={choosePhoto} disabled={uploading}>
-              <span className="tryon-drop-icon">＋</span>
-              <span>Upload Photo</span>
-              <small>JPEG, PNG or WebP, up to {capability?.max_upload_mb || 8} MB</small>
-            </button>
+            <div className="tryon-photo-choice">
+              <button type="button" className="tryon-drop" onClick={openCamera} disabled={uploading}>
+                <span className="tryon-drop-icon">📷</span>
+                <span>Take Photo</span>
+                <small>Use your device camera</small>
+              </button>
+              <span className="tryon-or">OR</span>
+              <button type="button" className="tryon-drop" onClick={choosePhoto} disabled={uploading}>
+                <span className="tryon-drop-icon">⬆</span>
+                <span>Upload Photo</span>
+                <small>JPEG, PNG or WebP, up to {capability?.max_upload_mb || 8} MB</small>
+              </button>
+            </div>
           )}
+
+          {cameraNote && !cameraOpen && (
+            <div className="aw-note" role="status" data-testid="camera-note">{cameraNote}</div>
+          )}
+
+          <div className="tryon-best">
+            <p><strong>📸 For the best try-on</strong></p>
+            <ul>
+              <li>Stand facing the camera.</li>
+              <li>Keep your full body visible from head to feet whenever possible.</li>
+              <li>Keep your face clearly visible.</li>
+              <li>Use good, even lighting.</li>
+              <li>Stand against a simple background.</li>
+              <li>Keep your arms and body unobstructed.</li>
+              <li>Avoid extreme poses or sitting down.</li>
+              <li>Make sure the clothing area is clearly visible.</li>
+            </ul>
+            <p className="aw-hint">
+              Your photo is used as the person image for this try-on. The try-on should
+              preserve your face and overall appearance as closely as the VTO model allows
+              while changing the clothing.
+            </p>
+          </div>
 
           <input
             ref={fileInput}
@@ -781,12 +838,10 @@ function VirtualTryOn() {
           {usage && (
             <p className="aw-hint tryon-attempts" aria-live="polite">
               <strong>
-                {successful}/{usage.limit}
+                {attemptsLeft}/{usage.limit}
               </strong>{" "}
-              try-ons created today · {attemptsLeft} remaining
-              {inProgress > 0
-                ? ` · ${inProgress} in progress`
-                : ""}
+              try-ons remaining today
+              {inProgress > 0 ? " · 1 being created" : ""}
               {resetsAt ? ` · resets ${resetsAt}` : ""}
             </p>
           )}
@@ -799,8 +854,8 @@ function VirtualTryOn() {
             <div className="tryon-status tryon-status-unavailable" role="status">
               <div>
                 <p>
-                  You've created all {usage.limit} of today's virtual try-ons.
-                  Your allowance resets at the start of the next day.
+                  You've reached today's limit of {usage.limit} virtual try-ons.
+                  Your allowance resets to {usage.limit} at the start of the next day.
                 </p>
                 {resetsAt && <p className="aw-hint">Resets {resetsAt}.</p>}
               </div>
@@ -809,7 +864,7 @@ function VirtualTryOn() {
           {capability && !serviceUp && !outOfAttempts && (
             // The banner at the top of the page already explains that
             // the service is down. What it must not leave ambiguous is
-            // whose limit was reached: the day's ten attempts and the
+            // whose limit was reached: the day's five try-ons and the
             // try-on service's own availability are different things,
             // and somebody with seven attempts left must never be left
             // thinking they have none.
@@ -833,7 +888,7 @@ function VirtualTryOn() {
                 {job?.total_steps > 1 && job?.step
                   ? `Garment ${job.step} of ${job.total_steps}. `
                   : ""}
-                This usually takes under a minute. You can keep browsing this page.
+                This usually takes one to two minutes. You can keep browsing this page.
               </p>
             </div>
           )}
@@ -846,7 +901,7 @@ function VirtualTryOn() {
           <h2 id="tryon-result-title" className="aw-section-title" style={{ marginTop: 0 }}>Your Virtual Look</h2>
           <div className="tryon-result-body">
             <figure>
-              <img src={assetUrl(showOriginal ? photoUrl : result.image_url)} alt={showOriginal ? "Your original photo" : "Your virtual look"} />
+              <img src={assetUrl(showOriginal ? (result.person_url || photoUrl) : result.image_url)} alt={showOriginal ? "Your original photo" : "Your virtual look"} />
               <figcaption className="aw-hint">{showOriginal ? "Original photo" : "AI-generated preview"}</figcaption>
               {result.notice && <p className="aw-hint" data-testid="tryon-notice">{result.notice}</p>}
             </figure>

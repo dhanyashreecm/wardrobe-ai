@@ -80,3 +80,13 @@ backend/tests/real_photos/
 
 # Scratch output from backend/tests/segmentation_bench/score.py
 backend/tests/segmentation_bench/result_*.json
+
+# Local-only: scratch files, the demo-account script (holds a default
+# password and real email aliases), its sample photos of people, and
+# Kaggle launch state.
+*.tmp
+scripts/vto_demo_setup.py
+setup_vto_demo.command
+scripts/vto_demo_assets/
+spaces/tryon/kaggle_kernel/.last_launch.json
+push_changes.command

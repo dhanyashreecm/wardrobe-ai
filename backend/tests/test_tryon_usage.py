@@ -1,5 +1,5 @@
 """
-The daily Virtual Try-On limit: ten generations per account per day.
+The daily Virtual Try-On limit: five successful generations per account per day.
 
 These are the rules that decide whether somebody can use the feature,
 so they are tested against the real module with a stand-in collection
@@ -36,20 +36,20 @@ class DailyLimitTests(unittest.TestCase):
 
     # -- the basic arithmetic --------------------------------------
 
-    def test_a_new_account_starts_with_ten(self):
+    def test_a_new_account_starts_with_five(self):
         snap = usage.snapshot("new@example.com")
-        self.assertEqual(snap["limit"], 10)
-        self.assertEqual(snap["remaining"], 10)
+        self.assertEqual(snap["limit"], 5)
+        self.assertEqual(snap["remaining"], 5)
         self.assertEqual(snap["used"], 0)
 
     def test_each_attempt_costs_exactly_one(self):
-        for taken in range(1, 11):
+        for taken in range(1, 6):
             granted, snap = usage.reserve("a@example.com")
             self.assertTrue(granted, f"attempt {taken} should be granted")
-            self.assertEqual(snap["remaining"], 10 - taken)
+            self.assertEqual(snap["remaining"], 5 - taken)
 
-    def test_the_eleventh_is_refused(self):
-        for _ in range(10):
+    def test_the_sixth_is_refused(self):
+        for _ in range(5):
             usage.reserve("a@example.com")
 
         granted, snap = usage.reserve("a@example.com")
@@ -57,24 +57,24 @@ class DailyLimitTests(unittest.TestCase):
         self.assertFalse(granted)
         self.assertEqual(snap["remaining"], 0)
         # Refusing must not keep counting: a user who tries twenty more
-        # times has still only used ten.
-        self.assertEqual(snap["used"], 10)
+        # times has still only used five.
+        self.assertEqual(snap["used"], 5)
 
     def test_the_refusal_message_is_the_one_the_brief_asked_for(self):
         message = usage.limit_message(usage.snapshot("a@example.com"))
-        self.assertIn("daily Virtual Try-On limit of 10 attempts", message)
-        self.assertIn("reset tomorrow", message)
+        self.assertIn("all 5 of today's virtual try-ons", message)
+        self.assertIn("resets to 5 tomorrow", message)
 
     # -- resetting --------------------------------------------------
 
     def test_a_new_day_starts_over(self):
-        for _ in range(10):
+        for _ in range(5):
             usage.reserve("a@example.com", now=LATE_YESTERDAY)
 
         self.assertEqual(
             usage.snapshot("a@example.com", now=LATE_YESTERDAY)["remaining"], 0)
         self.assertEqual(
-            usage.snapshot("a@example.com", now=JUST_AFTER_MIDNIGHT)["remaining"], 10)
+            usage.snapshot("a@example.com", now=JUST_AFTER_MIDNIGHT)["remaining"], 5)
 
     def test_the_day_turns_at_local_midnight_not_utc(self):
         self.assertEqual(usage.today(now=LATE_YESTERDAY), "2026-10-01")
@@ -89,15 +89,15 @@ class DailyLimitTests(unittest.TestCase):
     # -- one account's count is its own ------------------------------
 
     def test_accounts_do_not_share_a_counter(self):
-        for _ in range(10):
+        for _ in range(5):
             usage.reserve("a@example.com")
 
-        self.assertEqual(usage.snapshot("b@example.com")["remaining"], 10)
+        self.assertEqual(usage.snapshot("b@example.com")["remaining"], 5)
         self.assertTrue(usage.reserve("b@example.com")[0])
         self.assertEqual(usage.snapshot("a@example.com")["remaining"], 0)
 
     def test_capitalisation_does_not_create_a_second_allowance(self):
-        # Otherwise "Ganga@Gmail.com" would quietly get ten more.
+        # Otherwise "Ganga@Gmail.com" would quietly get five more.
         usage.reserve("ganga@example.com")
         self.assertEqual(usage.snapshot("Ganga@Example.COM")["used"], 1)
 
@@ -105,7 +105,7 @@ class DailyLimitTests(unittest.TestCase):
 
     def test_simultaneous_requests_cannot_exceed_the_limit(self):
         """
-        Forty requests at once must grant exactly ten.
+        Forty requests at once must grant exactly five.
 
         This is the test that would catch a read-then-write
         implementation: with a separate "how many so far?" query, many
@@ -122,8 +122,8 @@ class DailyLimitTests(unittest.TestCase):
         for thread in threads:
             thread.join()
 
-        self.assertEqual(sum(1 for granted in results if granted), 10)
-        self.assertEqual(usage.snapshot("race@example.com")["used"], 10)
+        self.assertEqual(sum(1 for granted in results if granted), 5)
+        self.assertEqual(usage.snapshot("race@example.com")["used"], 5)
 
     # -- nobody pays for a failure -----------------------------------
 
@@ -142,13 +142,13 @@ class DailyLimitTests(unittest.TestCase):
             usage.refund("c@example.com")
 
         self.assertEqual(usage.snapshot("c@example.com")["used"], 0)
-        self.assertEqual(usage.snapshot("c@example.com")["remaining"], 10)
+        self.assertEqual(usage.snapshot("c@example.com")["remaining"], 5)
 
     def test_a_refund_is_credited_to_the_day_it_was_taken(self):
         """
         An attempt reserved at 23:55 whose generation fails at 00:05
         belongs to yesterday - crediting it to today would hand out an
-        eleventh attempt.
+        sixth attempt.
         """
         usage.reserve("d@example.com", now=LATE_YESTERDAY)
 
@@ -180,6 +180,36 @@ class DailyLimitTests(unittest.TestCase):
             granted, _ = usage.reserve("f@example.com")
 
         self.assertFalse(granted)
+
+    # -- holds: in flight vs successful ------------------------------
+
+    def test_a_hold_is_not_shown_as_used_but_still_blocks_the_limit(self):
+        for n in range(4):
+            usage.reserve("h@example.com", hold_id=f"done-{n}")
+            usage.settle("h@example.com", f"done-{n}")
+        granted, snap = usage.reserve("h@example.com", hold_id="running")
+        self.assertTrue(granted)
+        self.assertEqual(snap["successful"], 4)
+        self.assertEqual(snap["remaining"], 1)   # not lowered before success
+        self.assertEqual(snap["in_progress"], 1)
+        # ...but a concurrent sixth reservation cannot slip in.
+        self.assertFalse(usage.reserve("h@example.com", hold_id="x")[0])
+
+    def test_release_gives_the_attempt_back_exactly_once(self):
+        usage.reserve("r@example.com", hold_id="j1")
+        self.assertTrue(usage.release("r@example.com", "j1"))
+        self.assertFalse(usage.release("r@example.com", "j1"))
+        snap = usage.snapshot("r@example.com")
+        self.assertEqual((snap["successful"], snap["remaining"], snap["in_progress"]), (0, 5, 0))
+
+    def test_settle_counts_exactly_one(self):
+        usage.reserve("s@example.com", hold_id="j1")
+        usage.settle("s@example.com", "j1")
+        snap = usage.snapshot("s@example.com")
+        self.assertEqual((snap["successful"], snap["remaining"]), (1, 4))
+
+    def test_default_limit_is_five(self):
+        self.assertEqual(config.TRYON_DAILY_LIMIT, 5)
 
 
 if __name__ == "__main__":

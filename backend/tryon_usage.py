@@ -1,5 +1,11 @@
 """
-TEN TRY-ONS A DAY, PER ACCOUNT.
+FIVE SUCCESSFUL TRY-ONS A DAY, PER ACCOUNT.
+
+Counted against the authenticated account (the JWT identity), never a
+device, browser or anything the client sends. Only a generation that
+produced a stored, viewable image is counted; every failure - provider
+error, quota, cold start, timeout, network error, invalid input,
+unusable response, our own storage - gives the attempt back.
 
 WHAT THIS IS NOT
 ----------------
@@ -133,19 +139,20 @@ def snapshot(user_email, now=None):
     holds = len((document or {}).get("holds") or [])
     limit = config.TRYON_DAILY_LIMIT
 
+    successful = max(0, used - holds)
+
     return {
-        # What the day's allowance has committed. "used" counts holds
-        # too, because an attempt in flight must not be handed out
-        # twice, and "remaining" is derived from it for the same reason.
-        "used": min(used, limit),
+        # Successful, stored images today. This is what the limit counts.
+        "successful": min(successful, limit),
+        "used": min(successful, limit),
         "limit": limit,
-        "remaining": max(0, limit - used),
-        # Of that, the images the user can actually open. This is the
-        # figure the limit is really about: a generation only ends up
-        # here once the provider produced an image and the backend
-        # stored it. Everything else is either still running or has
-        # been given back.
-        "successful": max(0, used - holds),
+        # What the page shows ("4/5 try-ons remaining today"). Derived
+        # from successful images only, so a generation that is still
+        # running - or that fails - never decrements it.
+        "remaining": max(0, limit - successful),
+        # Attempts reserved for generations still running. reserve()
+        # counts them (so the limit can never be exceeded by concurrent
+        # requests), but they are not shown as used.
         "in_progress": holds,
         "day": day,
         "resets_at": next_reset(now).isoformat() + "Z",
@@ -341,6 +348,6 @@ def release_stale_holds(user_email, now=None, day=None):
 def limit_message(snap):
     """The sentence shown when the day's attempts are gone."""
     return (
-        f"You've reached your daily Virtual Try-On limit of "
-        f"{snap['limit']} attempts. Your attempts will reset tomorrow."
+        f"You've used all {snap['limit']} of today's virtual try-ons. "
+        f"Your allowance resets to {snap['limit']} tomorrow."
     )
