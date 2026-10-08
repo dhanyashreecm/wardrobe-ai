@@ -17,6 +17,12 @@ export const HomeIcon = (p) => (
 export const SparkleIcon = (p) => (
   <svg {...base} {...p}><path d="M12 3v4M12 17v4M3 12h4M17 12h4" /><path d="m7 7 2 2M15 15l2 2M17 7l-2 2M9 15l-2 2" /></svg>
 );
+export const TrendIcon = (p) => (
+  <svg {...base} {...p}><path d="M3 17l6-6 4 4 8-8" /><path d="M15 7h6v6" /></svg>
+);
+export const CalendarIcon = (p) => (
+  <svg {...base} {...p}><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M3 10h18M8 3v4M16 3v4" /></svg>
+);
 export const PlaneIcon = (p) => (
   <svg {...base} {...p}><path d="M10.5 13.5 3 11l1.5-1.5 8 1 4-4a2 2 0 0 1 3 3l-4 4 1 8L15 23l-2.5-7.5" /><path d="m5 17 2 2" /></svg>
 );

@@ -1,7 +1,7 @@
 import { useNavigate, useLocation, Link } from "react-router-dom";
 import {
   HangerIcon, HomeIcon, SparkleIcon, PlaneIcon, TryOnIcon, SearchIcon,
-  GearIcon, LogoutIcon,
+  GearIcon, LogoutIcon, TrendIcon, CalendarIcon,
 } from "./Icons";
 import { clearProfileCache } from "./PageHeader";
 import { clearCategoryCache } from "../lib/categories";
@@ -10,6 +10,8 @@ const NAV_ITEMS = [
   { to: "/dashboard", label: "Home", Icon: HomeIcon },
   { to: "/wardrobe", label: "My Wardrobe", Icon: HangerIcon },
   { to: "/recommend", label: "Outfit Recommendations", Icon: SparkleIcon },
+  { to: "/style", label: "Style & Trends", Icon: TrendIcon },
+  { to: "/calendar", label: "Outfit Calendar", Icon: CalendarIcon },
   { to: "/trip", label: "Trip Planner", Icon: PlaneIcon },
   { to: "/tryon", label: "Virtual Try-On", Icon: TryOnIcon },
   { to: "/similar", label: "Find Similar & Shop", Icon: SearchIcon },

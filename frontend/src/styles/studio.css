@@ -1,0 +1,64 @@
+/* Style & Trends + Outfit Calendar - cream/ivory + dusty rose */
+.st-section { background: #fffdf9; border: 1px solid #ece1d6; border-radius: 22px; padding: 22px; margin: 0 0 22px; box-shadow: 0 10px 30px rgba(42,33,24,.06); }
+.st-section h2 { font-family: var(--aw-serif, "Playfair Display", serif); margin: 0; }
+.st-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+.st-tag { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: 4px 10px; border-radius: 999px; background: #f3e0d8; color: #a2543d; }
+.st-tag.insp { background: #e9e1ef; color: #6b4f86; }
+.st-hint, .st-small { color: #8a7a6d; font-size: 13.5px; }
+.st-label { font-size: 12px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: #a2543d; margin: 10px 0 4px; }
+.st-note { background: #faf3e8; border-radius: 10px; padding: 8px 12px; font-size: 13px; color: #6b5b4d; }
+.st-toast { position: fixed; right: 18px; bottom: 18px; z-index: 50; background: #2a2118; color: #fff; padding: 10px 16px; border-radius: 999px; font-size: 14px; }
+.st-trends { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; margin-top: 12px; }
+.st-trend { border: 1px solid #e6d7f0; background: linear-gradient(180deg,#fbf8fd,#fff); border-radius: 18px; padding: 16px; display: flex; flex-direction: column; gap: 4px; }
+.st-trend h3 { font-family: var(--aw-serif, serif); margin: 0 0 4px; font-size: 20px; }
+.st-trend ul, .st-why ul { margin: 0; padding-left: 18px; font-size: 14px; }
+.st-sources summary { cursor: pointer; font-size: 12.5px; color: #6b4f86; margin-top: 6px; }
+.st-sources li { font-size: 12.5px; margin: 4px 0; }
+.st-can { border-radius: 12px; padding: 8px 12px; margin: 8px 0; font-size: 14px; }
+.st-can.yes { background: #e3eedf; } .st-can.partly { background: #f8efdc; } .st-can.no { background: #f8e2dc; } .st-can.insp { background: #efe9f4; }
+.st-can .st-label { margin-top: 0; }
+.st-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; align-items: end; margin: 10px 0; }
+.st-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: #8a7a6d; }
+.st-outfits { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; margin-top: 12px; }
+.st-outfit { border: 1px solid #ecdcd2; border-radius: 18px; padding: 16px; background: #fff; display: flex; flex-direction: column; gap: 6px; }
+.st-outfit h3 { font-family: var(--aw-serif, serif); margin: 6px 0 2px; font-size: 21px; letter-spacing: .02em; }
+.st-meta { font-size: 13px; color: #6b5b4d; margin: 0; }
+.st-sub { font-size: 12px; color: #8a7a6d; margin: 4px 0 0; }
+.st-pieces { display: grid; grid-template-columns: repeat(auto-fill, minmax(78px, 1fr)); gap: 8px; }
+.st-piece { margin: 0; text-align: center; }
+.st-piece img { width: 100%; aspect-ratio: 3/4; object-fit: cover; border-radius: 10px; background: #f7f1ea; }
+.st-piece figcaption { font-size: 11.5px; line-height: 1.25; margin-top: 3px; }
+.st-piece small { color: #8a7a6d; }
+.st-fresh { color: #3f7d4e; font-size: 13px; }
+.st-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; }
+.st-gaps { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+.st-gap { border: 1px solid #ecdcd2; border-radius: 18px; padding: 16px; }
+.st-gap.top { border: 2px solid #c1694f; background: #fff8f4; }
+.st-gap h3 { font-family: var(--aw-serif, serif); margin: 6px 0; }
+.st-mini { display: flex; gap: 6px; flex-wrap: wrap; }
+.st-mini img { width: 46px; height: 58px; object-fit: cover; border-radius: 8px; }
+.st-shops { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.st-shops a { font-size: 13px; font-weight: 600; color: #a2543d; border: 1px solid #ecdcd2; border-radius: 999px; padding: 5px 12px; text-decoration: none; }
+.st-nobuy { background: #e3eedf; border-radius: 14px; padding: 14px; font-weight: 600; }
+.st-cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.st-cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.st-cal-wd { text-align: center; font-size: 12px; color: #8a7a6d; font-weight: 700; }
+.st-cal-day { position: relative; min-height: 74px; border: 1px solid #ece1d6; border-radius: 12px; background: #fff; padding: 4px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.st-cal-day span { font-size: 12px; align-self: flex-start; }
+.st-cal-day img { width: 36px; height: 44px; object-fit: cover; border-radius: 6px; }
+.st-cal-day small { font-size: 10px; color: #a2543d; }
+.st-cal-day.today { border-color: #c1694f; }
+.st-cal-day.on { background: #f3e0d8; }
+.st-cal-entry { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 8px 0; border-bottom: 1px solid #f1e8de; }
+.st-pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; margin: 8px 0 12px; max-height: 320px; overflow: auto; }
+.st-pick button { border: 2px solid transparent; border-radius: 12px; background: #fff; padding: 4px; cursor: pointer; }
+.st-pick button.on { border-color: #c1694f; background: #fff3ee; }
+.st-pick img { width: 100%; aspect-ratio: 3/4; object-fit: cover; border-radius: 8px; }
+.st-pick small { font-size: 11px; display: block; }
+.aw-wcard-worn { font-size: 11.5px; color: #8a7a6d; margin-top: 2px; }
+@media (max-width: 600px) {
+  .st-section { padding: 14px; border-radius: 16px; }
+  .st-cal-day { min-height: 54px; }
+  .st-cal-day img { width: 26px; height: 32px; }
+  .st-outfits, .st-trends, .st-gaps { grid-template-columns: 1fr; }
+}

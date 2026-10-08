@@ -1543,6 +1543,15 @@ def serve_indofashion_image(filename):
 
 
 # =========================================================
+# STYLE & TRENDS (Outfit Studio) + OUTFIT CALENDAR - see style_routes.py
+# =========================================================
+from backend.style_routes import style_bp  # noqa: E402
+from backend.style_studio import saved as _saved_looks  # noqa: E402
+
+app.register_blueprint(style_bp)
+
+
+# =========================================================
 # RUN FLASK
 # =========================================================
 # =========================================================
@@ -2886,6 +2895,7 @@ def delete_account():
     delete_all_wardrobe_for_user(user_email)
     delete_all_trips_for_user(user_email)
     outfit_feedback.delete_all_for_user(user_email)
+    _saved_looks.delete_all_for_user(user_email)
 
     # Photographs of a person's body must not outlive the account
     # they belonged to. The records go first, then the images

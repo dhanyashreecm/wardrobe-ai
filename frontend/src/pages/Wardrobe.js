@@ -6,6 +6,7 @@ import Layout from "../components/Layout";
 import { ProfileChip } from "../components/PageHeader";
 import { PlusIcon, SearchIcon } from "../components/Icons";
 import "../styles/aw-v2.css";
+import "../styles/studio.css";
 import { API_URL, assetUrl } from "../config";
 import {
   authGet, apiErrorMessage, isAuthError, itemMeta, swatch, OCCASIONS, occasionLabel,
@@ -359,6 +360,7 @@ function Wardrobe() {
   // Gender and categories come from the account on the server.
   const { sections, gender, error: categoryError } = useCategories();
   const [items, setItems] = useState([]);
+  const [lastWorn, setLastWorn] = useState({});
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [autoCategory, setAutoCategory] = useState(false);
@@ -382,6 +384,9 @@ function Wardrobe() {
     try {
       const data = await authGet("/api/wardrobe");
       setItems(data.items || []);
+      // "Last worn 12 days ago" (Outfit Calendar). Optional - a failure
+      // here must never stop the wardrobe from showing.
+      authGet("/api/wardrobe/last-worn").then((d) => setLastWorn(d.last_worn || {})).catch(() => {});
       setLoadError("");
     } catch (err) {
       if (isAuthError(err)) goLogin();
@@ -570,6 +575,12 @@ function Wardrobe() {
                 <div>
                   <div className="aw-item-name">{item.display_name || item.category}</div>
                   <div className="aw-item-meta">{itemMeta(item)}</div>
+                  <div className="aw-wcard-worn" data-testid="last-worn">
+                    {lastWorn[item._id]
+                      ? (lastWorn[item._id].days_ago === 0 ? "Worn today"
+                        : `Last worn ${lastWorn[item._id].days_ago} day${lastWorn[item._id].days_ago === 1 ? "" : "s"} ago`)
+                      : "Not worn yet"}
+                  </div>
                 </div>
                 <span className="aw-dot" style={{ background: swatch(item.color) }} title={item.color} />
               </div>

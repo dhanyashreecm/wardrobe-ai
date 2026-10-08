@@ -1,0 +1,266 @@
+{
+  "curated_on": "2026-10-08",
+  "note": "Curated from the published sources listed below. Each trend lists the sources that name it; nothing here is invented. Live signals (Pinterest Trends API, news search) are added on top only when their API keys are configured.",
+  "sources": {
+    "nap_fw26": {"name": "NET-A-PORTER (PORTER)", "title": "The key fall/winter 2026 fashion trends", "url": "https://www.net-a-porter.com/porter/article-c99dca08ba956cfc/fashion/art-of-style/fw26-fashion-trends", "published": null},
+    "coveteur_fall26": {"name": "Coveteur", "title": "Fall fashion trends 2026", "url": "https://coveteur.com/fall-fashion-trends-2026", "published": "2026-08-12"},
+    "trendalytics_fw26": {"name": "Trendalytics", "title": "Womenswear fall/winter 2026 trend recap", "url": "https://blog.trendalytics.co/womenswear-fall/winter-2026-trend-recap", "published": "2026-07-07"},
+    "numero_menfw26": {"name": "Numéro", "title": "11 trends spotted at the fall-winter 2026-2027 men's fashion week", "url": "https://numero.com/en/fashion/fashion-week-en/11-trends-spotted-at-the-fall-winter-2026-2027-mens-fashion-week/", "published": "2026-02-06"},
+    "impression_men26": {"name": "The Impression", "title": "The fall 2026 men's season overview", "url": "https://theimpression.com/the-fall-2026-mens-season-overview/", "published": "2026-02-06"},
+    "pinterest_predicts26": {"name": "Pinterest Predicts 2026 (reported by FashionUnited)", "title": "Poetcore, opera aesthetic and brooches: key style predictions from Pinterest for 2026", "url": "https://fashionunited.in/news/fashion/poetcore-opera-aesthetic-and-brooches-key-style-predictions-from-pinterest-for-2026/2025121052470", "published": "2025-12-10"},
+    "aza_fusion26": {"name": "Aza Fashions", "title": "Best fusion wear ideas for festive season 2026", "url": "https://www.azafashions.com/blog/best-fusion-wear-ideas-for-festive-season-2026/", "published": "2026-05-29"},
+    "kisah_diwali26": {"name": "Kisah", "title": "How to dress for Diwali 2026: a men's style guide", "url": "https://kisah.in/blogs/news/how-to-dress-for-diwali-2026-a-mens-style-guide", "published": "2026-07-23"},
+    "kari_ethnic26": {"name": "House of Kari", "title": "Ethnic wear trends 2026", "url": "https://houseofkari.in/blogs/news/ethnic-wear-trends-2026", "published": "2026-09-04"},
+    "lashkaraa_festive26": {"name": "Lashkaraa", "title": "Party & festive wear report 2026: what our customers actually wore", "url": "https://www.lashkaraa.com/blogs/lashkaraa/party-festive-wear-report-2026-what-our-customers-actually-wore", "published": "2026-08-05"}
+  },
+  "trends": [
+    {
+      "id": "sharp-tailoring", "name": "Sharp Tailoring", "emoji": "🕴️", "gender": ["male"], "category": "western",
+      "summary": "Tailoring is getting cleaner and sharper again - fitted, structured pieces in quiet colours.",
+      "meaning": ["structured blazers and coats", "straight, tailored trousers", "crisp shirts", "grey-on-grey and muted tones"],
+      "why": "The Impression's fall 2026 men's overview describes structured tailoring with sharp shoulders and grey-on-grey palettes, and Numéro lists slim classic tailoring among the trends of the FW26-27 men's shows.",
+      "occasions": ["office", "interview", "party"], "colors": ["grey", "charcoal", "navy", "black", "white"], "silhouettes": ["structured shoulders", "straight leg"],
+      "sources": ["impression_men26", "numero_menfw26"], "keywords": ["tailoring", "suit", "blazer", "pinstripe"],
+      "recipe": {"slots": [
+        {"label": "a blazer or coat", "kinds": ["blazer", "coat"], "buy": {"category": "Blazer", "color": "charcoal"}},
+        {"label": "a shirt", "kinds": ["shirt"], "buy": {"category": "Formal Shirt", "color": "white"}},
+        {"label": "tailored trousers", "kinds": ["pant"], "buy": {"category": "Formal Trousers", "color": "grey"}}
+      ]}
+    },
+    {
+      "id": "ladylike-suiting", "name": "Ladylike Suiting", "emoji": "💼", "gender": ["female"], "category": "western",
+      "summary": "Polished suiting is back - blazers with skirts or high-waisted trousers, worn with a modern twist.",
+      "meaning": ["a tailored blazer", "a skirt or high-waisted trousers", "a simple top underneath", "clean, put-together lines"],
+      "why": "Coveteur's fall 2026 trends include skirt suits and ladylike tailoring, and Trendalytics' FW26 recap names skirt suiting and high-waisted trousers among the season's key silhouettes.",
+      "occasions": ["office", "interview", "date"], "colors": ["grey", "black", "beige", "navy", "white"], "silhouettes": ["high waist", "tailored"],
+      "sources": ["coveteur_fall26", "trendalytics_fw26"], "keywords": ["skirt suit", "tailoring", "blazer", "suiting"],
+      "recipe": {"slots": [
+        {"label": "a blazer", "kinds": ["blazer"], "buy": {"category": "Blazer", "color": "black"}},
+        {"label": "a skirt or trousers", "kinds": ["skirt", "pant"], "buy": {"category": "Trousers", "color": "black"}},
+        {"label": "a top or shirt", "kinds": ["tshirt", "shirt"], "buy": {"category": "Top", "color": "white"}}
+      ]}
+    },
+    {
+      "id": "minimalist-dress", "name": "The Minimalist Dress", "emoji": "🤍", "gender": ["female"], "category": "western",
+      "summary": "One clean, simple dress doing all the work - no fuss, just a good shape.",
+      "meaning": ["a plain midi or maxi dress", "clean lines, simple neckline", "minimal accessories"],
+      "why": "NET-A-PORTER's fall/winter 2026 trend edit names the minimalist dress - simple midis and maxis with clean lines - as a key look.",
+      "occasions": ["date", "day_outing", "party"], "colors": ["white", "black", "beige", "grey", "ivory"], "silhouettes": ["midi", "maxi", "column"],
+      "sources": ["nap_fw26"], "keywords": ["minimalist dress", "maxi dress", "midi dress"],
+      "recipe": {"solid_core": true, "slots": [
+        {"label": "a plain dress", "kinds": ["dress", "gown"], "buy": {"category": "Dress", "color": "black"}}
+      ]}
+    },
+    {
+      "id": "grey-neutral", "name": "Grey Is the New Neutral", "emoji": "🩶", "gender": ["female", "male"], "category": "western",
+      "summary": "Grey is replacing brown as the go-to neutral this season.",
+      "meaning": ["grey as the base colour", "grey with black, white or navy", "tonal, calm outfits"],
+      "why": "Trendalytics' FW26 recap reports grey overtaking brown as the dominant neutral, and The Impression notes grey-on-grey palettes in the fall 2026 men's shows.",
+      "occasions": ["office", "college", "casual"], "colors": ["grey", "charcoal", "silver"], "silhouettes": [],
+      "sources": ["trendalytics_fw26", "impression_men26"], "keywords": ["grey", "gray"],
+      "recipe": {"palette": {"words": ["grey", "gray", "charcoal", "silver"]}, "slots": [
+        {"label": "a main piece", "kinds": ["tshirt", "shirt", "pant", "jeans", "skirt", "dress", "blazer", "coat", "jacket"], "buy": {"category": "Trousers", "color": "grey"}}
+      ]}
+    },
+    {
+      "id": "layers-upon-layers", "name": "Layers Upon Layers", "emoji": "🧥", "gender": ["female", "male"], "category": "western",
+      "summary": "More is more - stacking a jacket, blazer or cardigan over your outfit to add depth.",
+      "meaning": ["a jacket, blazer, coat or cardigan on top", "mixing textures", "a simple base underneath"],
+      "why": "NET-A-PORTER's FW26 edit calls out 'layers upon layers', and Trendalytics' recap describes a 'More Is More' direction built on layering.",
+      "occasions": ["casual", "college", "day_outing"], "colors": [], "silhouettes": ["layered"],
+      "sources": ["nap_fw26", "trendalytics_fw26"], "keywords": ["layering", "layers"],
+      "recipe": {"slots": [
+        {"label": "a layer (jacket, blazer, coat or cardigan)", "kinds": ["jacket", "blazer", "coat"], "buy": {"category": "Denim Jacket", "color": "blue"}},
+        {"label": "a top", "kinds": ["tshirt", "shirt"], "buy": {"category": "T-Shirt", "color": "white"}},
+        {"label": "a bottom", "kinds": ["jeans", "pant", "skirt", "shorts"], "buy": {"category": "Jeans", "color": "blue"}}
+      ]}
+    },
+    {
+      "id": "dark-romance", "name": "Dark Romance", "emoji": "🖤", "gender": ["female"], "category": "western",
+      "summary": "Moody, romantic dressing in black and deep wine shades.",
+      "meaning": ["black or deep wine pieces", "lace, velvet or high necklines if you have them", "a dramatic evening mood"],
+      "why": "Coveteur ('Night Moves'), NET-A-PORTER ('gothic romance') and Trendalytics ('The Other Side') all name dark, romantic eveningwear for fall 2026.",
+      "occasions": ["party", "date"], "colors": ["black", "wine", "burgundy", "plum"], "silhouettes": ["high neck", "fitted"],
+      "sources": ["coveteur_fall26", "nap_fw26", "trendalytics_fw26"], "keywords": ["gothic", "dark romance", "lace", "velvet"],
+      "recipe": {"palette": {"words": ["black", "wine", "burgundy", "maroon", "plum", "charcoal"], "min": 2}, "slots": [
+        {"label": "a dress or top", "kinds": ["dress", "gown", "tshirt", "shirt"], "buy": {"category": "Dress", "color": "black"}}
+      ]}
+    },
+    {
+      "id": "jewel-tones", "name": "Jewel-Tone Colour", "emoji": "💎", "gender": ["female", "male"], "category": "western",
+      "summary": "Rich colour is in - bottle green, scarlet, purple and ochre, head-to-toe or as one bold piece.",
+      "meaning": ["one rich, saturated colour", "balanced with neutrals", "or a full one-colour look"],
+      "why": "NET-A-PORTER lists bottle green, ochre, scarlet and purple as FW26 key colours, and Numéro reports red taking over the men's FW26-27 shows.",
+      "occasions": ["party", "date", "day_outing"], "colors": ["green", "emerald", "red", "scarlet", "purple", "mustard"], "silhouettes": [],
+      "sources": ["nap_fw26", "numero_menfw26"], "keywords": ["red", "bottle green", "purple", "ochre", "colour"],
+      "recipe": {"palette": {"words": ["green", "emerald", "forest", "red", "crimson", "purple", "plum", "violet", "mustard", "maroon", "burgundy", "wine"]}, "slots": [
+        {"label": "a main piece", "kinds": ["tshirt", "shirt", "pant", "jeans", "skirt", "dress", "gown", "blazer", "coat", "jacket"], "buy": {"category": "Shirt", "color": "emerald"}}
+      ]}
+    },
+    {
+      "id": "checks", "name": "On the Grid: Checks & Tartan", "emoji": "🟫", "gender": ["female", "male"], "category": "western",
+      "summary": "Checks, plaids and tartan are everywhere - on shirts, coats and skirts.",
+      "meaning": ["one checked or printed piece", "kept with plain neutrals", "or checks mixed boldly"],
+      "why": "Coveteur's fall 2026 trends include checks, tartan and gingham ('On The Grid'), and Numéro reports bigger, high-contrast tartans in the men's FW26-27 shows.",
+      "occasions": ["casual", "college", "office"], "colors": ["red", "brown", "navy", "green"], "silhouettes": [],
+      "sources": ["coveteur_fall26", "numero_menfw26"], "keywords": ["tartan", "plaid", "check", "gingham"],
+      "recipe": {"patterned_core": true, "pattern_note": "We can see that a piece is printed, not exactly which print - so any patterned piece counts.", "slots": [
+        {"label": "a printed or checked piece", "kinds": ["shirt", "tshirt", "skirt", "pant", "jacket", "coat", "blazer", "dress"], "buy": {"category": "Shirt", "color": "red", "printed": true}}
+      ]}
+    },
+    {
+      "id": "khaki-coded", "name": "Khaki Coded", "emoji": "🧭", "gender": ["female", "male"], "category": "western",
+      "summary": "An explorer feel - khaki, beige and earthy browns with relaxed shirts and pleated trousers.",
+      "meaning": ["khaki, beige, olive or brown pieces", "linen-style shirts", "pleated trousers or bermuda shorts", "utility details"],
+      "why": "Pinterest Predicts 2026 named 'Khaki Coded'; as reported by FashionUnited, searches rose for brown linen shirts (+100%), field jacket outfit men (+65%) and pleated trousers (+30%).",
+      "occasions": ["day_outing", "casual", "college"], "colors": ["khaki", "beige", "olive", "brown", "tan", "camel"], "silhouettes": ["relaxed", "pleated"],
+      "sources": ["pinterest_predicts26"], "keywords": ["khaki", "utility", "linen shirt", "pleated trousers"],
+      "recipe": {"palette": {"words": ["khaki", "beige", "olive", "brown", "tan", "camel", "taupe"]}, "slots": [
+        {"label": "a shirt or tee", "kinds": ["shirt", "tshirt"], "buy": {"category": "Shirt", "color": "beige"}},
+        {"label": "trousers, chinos or shorts", "kinds": ["pant", "shorts"], "buy": {"category": "Trousers", "color": "khaki"}}
+      ]}
+    },
+    {
+      "id": "poetcore", "name": "Poetcore", "emoji": "🪶", "gender": ["female", "male"], "category": "western",
+      "summary": "A literary, slightly vintage look - blazers, shirts and ties with a romantic edge.",
+      "meaning": ["a vintage-feel blazer or coat", "a shirt with a collar", "a tie, satchel or brooch as the detail"],
+      "why": "Pinterest Predicts 2026 named 'Poetcore'; as reported by FashionUnited, searches rose for 'the poet aesthetic' (+175%), 'tie accessories' (+85%) and 'poet core' (+75%). Numéro's 'rock-dandy' men's trend is close in spirit.",
+      "occasions": ["college", "date", "office"], "colors": ["brown", "black", "white", "cream", "navy"], "silhouettes": ["oversized collar", "vintage tailoring"],
+      "sources": ["pinterest_predicts26", "numero_menfw26"], "keywords": ["poetcore", "poet", "tie", "satchel"],
+      "recipe": {"slots": [
+        {"label": "a blazer or coat", "kinds": ["blazer", "coat"], "buy": {"category": "Blazer", "color": "brown"}},
+        {"label": "a collared shirt", "kinds": ["shirt"], "buy": {"category": "Shirt", "color": "white"}}
+      ]}
+    },
+    {
+      "id": "smart-casual-knits", "name": "Smart-Casual Knits", "emoji": "🧶", "gender": ["male"], "category": "western",
+      "summary": "Preppy, easy smartness - a cardigan or knit over a shirt with tailored trousers.",
+      "meaning": ["a cardigan or sweater layer", "a shirt or polo", "chinos or tailored trousers"],
+      "why": "The Impression's fall 2026 men's overview highlights smart casualwear - fair-isle knits, cardigans and pleat-front or straight-leg tailored trousers.",
+      "occasions": ["college", "office", "casual"], "colors": ["navy", "beige", "olive", "grey", "cream"], "silhouettes": ["straight leg"],
+      "sources": ["impression_men26"], "keywords": ["cardigan", "knitwear", "preppy"],
+      "recipe": {"slots": [
+        {"label": "a cardigan or knit layer", "kinds": ["jacket"], "categories": ["Cardigan"], "buy": {"category": "Cardigan", "color": "navy"}},
+        {"label": "a shirt or polo", "kinds": ["shirt", "tshirt"], "buy": {"category": "Polo Shirt", "color": "white"}},
+        {"label": "chinos or trousers", "kinds": ["pant"], "buy": {"category": "Chinos", "color": "beige"}}
+      ]}
+    },
+    {
+      "id": "bermuda-shorts", "name": "Bermuda Shorts", "emoji": "🩳", "gender": ["male"], "category": "western",
+      "summary": "Longer, knee-length shorts styled up with a proper shirt.",
+      "meaning": ["knee-length shorts", "a shirt or polo instead of a tee", "clean shoes"],
+      "why": "Numéro lists wide Bermuda shorts falling below the knee among the FW26-27 men's trends, and Pinterest Predicts 2026 ('Khaki Coded') mentions bermuda shorts too.",
+      "occasions": ["casual", "day_outing"], "colors": ["beige", "navy", "khaki", "denim"], "silhouettes": ["knee length", "wide"],
+      "sources": ["numero_menfw26", "pinterest_predicts26"], "keywords": ["bermuda", "shorts"],
+      "recipe": {"slots": [
+        {"label": "shorts", "kinds": ["shorts"], "buy": {"category": "Shorts", "color": "beige"}},
+        {"label": "a shirt or polo", "kinds": ["shirt", "tshirt"], "buy": {"category": "Casual Shirt", "color": "white"}}
+      ]}
+    },
+    {
+      "id": "folk-tales", "name": "Folk Tales", "emoji": "🌾", "gender": ["female"], "category": "western",
+      "summary": "Cosy, countryside-inspired pieces - skirts with knits and boots.",
+      "meaning": ["a skirt (tiered if you have one)", "a cardigan or knit", "boots"],
+      "why": "NET-A-PORTER's FW26 edit names 'folk tales' - tiered skirts, checked dresses, hand-knit sweaters and Western-style boots.",
+      "occasions": ["day_outing", "casual", "college"], "colors": ["brown", "cream", "red", "green"], "silhouettes": ["tiered", "flowing"],
+      "sources": ["nap_fw26"], "keywords": ["folk", "tiered skirt", "knit"],
+      "recipe": {"slots": [
+        {"label": "a skirt", "kinds": ["skirt"], "buy": {"category": "Skirt", "color": "brown"}},
+        {"label": "a cardigan or jacket", "kinds": ["jacket"], "buy": {"category": "Cardigan", "color": "cream"}},
+        {"label": "boots", "kinds": ["boots"], "buy": {"category": "Boots", "color": "brown"}}
+      ]}
+    },
+    {
+      "id": "short-kurta", "name": "Short Kurta, Modern Pairing", "emoji": "🌿", "gender": ["female"], "category": "indian",
+      "summary": "Shorter kurtas styled lighter and more modern for everyday wear.",
+      "meaning": ["a short kurta", "straight pants or palazzos", "minimal jewellery"],
+      "why": "House of Kari's ethnic wear trends 2026 lists short kurtas worn with straight pants, palazzos or jeans, and Chikankari in modern silhouettes.",
+      "occasions": ["college", "casual", "office"], "colors": ["white", "ivory", "pastel", "blue"], "silhouettes": ["short kurta", "straight pants"],
+      "sources": ["kari_ethnic26"], "keywords": ["short kurta", "kurti", "chikankari"],
+      "rule_note": "The trend also pairs kurtas with jeans. Your styling rules keep ethnic and western pieces apart, so your version uses palazzos, salwar or leggings.",
+      "recipe": {"slots": [
+        {"label": "a kurta", "kinds": ["kurta", "kurta_women"], "buy": {"category": "Kurta (Women)", "color": "white"}},
+        {"label": "palazzos, salwar or leggings", "kinds": ["palazzo", "salwar", "leggings"], "buy": {"category": "Palazzos", "color": "white"}}
+      ]}
+    },
+    {
+      "id": "ethnic-coords", "name": "Ethnic Co-ord Sets", "emoji": "🎀", "gender": ["female"], "category": "indian",
+      "summary": "Matching ethnic sets - one easy outfit you can dress up or down.",
+      "meaning": ["a matching kurta set or suit", "block prints, ikat or chikankari", "simple footwear"],
+      "why": "House of Kari names co-ord sets (including Chikankari cotton co-ords) for 2026, and Aza Fashions lists printed co-ord sets among its festive fusion ideas for 2026.",
+      "occasions": ["casual", "traditional", "office"], "colors": [], "silhouettes": ["co-ord"],
+      "sources": ["kari_ethnic26", "aza_fusion26"], "keywords": ["co-ord", "coord", "kurta set"],
+      "recipe": {"slots": [
+        {"label": "a kurta set or salwar suit", "kinds": ["ethnic_set"], "buy": {"category": "Kurta Set (Women)", "color": "sage"}}
+      ]}
+    },
+    {
+      "id": "pastel-festive", "name": "Pastel Festive", "emoji": "🌸", "gender": ["female"], "category": "indian",
+      "summary": "Soft pastels for day festivities - lavender, sage, blush and ivory.",
+      "meaning": ["an ethnic outfit in a pastel shade", "light jewellery", "fresh daytime look"],
+      "why": "House of Kari lists pastel shades (lavender, sage, blush pink, powder blue, ivory) for 2026, and Lashkaraa's 2026 festive report saw sage green, dusty rose and ivory emerging.",
+      "occasions": ["traditional", "wedding"], "colors": ["lavender", "sage", "blush", "pink", "sky", "ivory", "mint", "peach", "lilac"], "silhouettes": [],
+      "sources": ["kari_ethnic26", "lashkaraa_festive26"], "keywords": ["pastel", "sage", "lavender", "blush", "ivory"],
+      "recipe": {"mode": "ethnic", "palette": {"words": ["lavender", "lilac", "sage", "mint", "blush", "pink", "rose", "sky", "ivory", "cream", "peach", "mauve"]}, "slots": [
+        {"label": "an ethnic outfit", "kinds": ["saree", "lehenga", "anarkali", "ethnic_set", "kurta", "kurta_women"], "buy": {"category": "Anarkali", "color": "sage"}}
+      ]}
+    },
+    {
+      "id": "jewel-festive-night", "name": "Jewel-Tone Festive Night", "emoji": "🪔", "gender": ["female"], "category": "indian",
+      "summary": "Deep jewel colours for the big festive night - emerald, wine, royal blue.",
+      "meaning": ["a saree, lehenga or anarkali", "emerald, wine, burgundy, teal or royal blue", "metallic accents"],
+      "why": "House of Kari names rich jewel tones (emerald, wine, burgundy, deep teal) for evening and festive wear in 2026, and Lashkaraa's 2026 report found partywear lehengas and sarees in jewel tones dominated Diwali night.",
+      "occasions": ["wedding", "traditional"], "colors": ["emerald", "wine", "burgundy", "teal", "blue", "red", "maroon"], "silhouettes": [],
+      "sources": ["kari_ethnic26", "lashkaraa_festive26"], "keywords": ["jewel tones", "emerald", "diwali", "lehenga", "saree"],
+      "recipe": {"mode": "ethnic", "palette": {"words": ["emerald", "green", "wine", "burgundy", "maroon", "teal", "blue", "cobalt", "navy", "red", "purple", "magenta"]}, "slots": [
+        {"label": "a saree, lehenga or anarkali", "kinds": ["saree", "lehenga", "anarkali", "ethnic_set"], "buy": {"category": "Saree", "color": "emerald"}}
+      ]}
+    },
+    {
+      "id": "indo-western-fusion", "name": "Indo-Western Fusion", "emoji": "✨", "gender": ["female"], "category": "indo_western",
+      "summary": "Indian pieces in western shapes - dhoti pants with crop tops, sari gowns, jacket lehengas.",
+      "meaning": ["a pre-stitched sari gown or kurta dress", "a jacket worn in place of a blouse", "Indian fabric, western proportions"],
+      "why": "Aza Fashions' 2026 festive fusion ideas include dhoti pants with an embellished crop top, sari gowns and jacket lehengas, and Lashkaraa's 2026 report lists pre-draped sarees and cape dupattas as emerging.",
+      "occasions": ["party", "wedding"], "colors": [], "silhouettes": ["fusion"],
+      "sources": ["aza_fusion26", "lashkaraa_festive26"], "keywords": ["fusion", "indo-western", "sari gown", "pre-draped"],
+      "inspiration_only": true,
+      "rule_note": "This trend mixes ethnic and western pieces in one outfit. Your styling rules keep them separate, so it's shown as inspiration only.",
+      "recipe": {"slots": []}
+    },
+    {
+      "id": "kurta-nehru-jacket", "name": "Kurta + Nehru Jacket", "emoji": "🪔", "gender": ["male"], "category": "indian",
+      "summary": "A jacket over the kurta - the festive look that feels dressed-up without a sherwani.",
+      "meaning": ["a kurta with pajama or churidar", "a Nehru or embroidered jacket on top", "mojaris, not sneakers"],
+      "why": "Kisah's Diwali 2026 men's guide recommends embroidered-jacket kurta sets and sequined Nehru jacket sets for evening festivities, and advises against casual sneakers.",
+      "occasions": ["traditional", "wedding"], "colors": ["emerald", "royal blue", "maroon", "ivory", "black", "gold"], "silhouettes": ["layered"],
+      "sources": ["kisah_diwali26"], "keywords": ["nehru jacket", "kurta jacket", "diwali"],
+      "recipe": {"slots": [
+        {"label": "a kurta", "kinds": ["kurta", "kurta_men"], "buy": {"category": "Kurta (Men)", "color": "ivory"}},
+        {"label": "a Nehru jacket", "kinds": ["nehru"], "buy": {"category": "Nehru Jacket", "color": "maroon"}}
+      ]}
+    },
+    {
+      "id": "mid-kurta-set", "name": "Clean Kurta Set", "emoji": "🌙", "gender": ["male"], "category": "indian",
+      "summary": "A shorter, cleaner kurta set in a rich festive colour.",
+      "meaning": ["a kurta with pajama or churidar (or a kurta set)", "emerald, royal blue, maroon, mustard or ivory", "mojaris or loafers"],
+      "why": "Kisah's Diwali 2026 men's guide recommends mid-length kurta trouser sets and names emerald, royal blue, maroon, mustard, rust and ivory as festive shades.",
+      "occasions": ["traditional", "wedding"], "colors": ["emerald", "blue", "maroon", "mustard", "rust", "ivory", "olive"], "silhouettes": ["mid-length kurta"],
+      "sources": ["kisah_diwali26"], "keywords": ["kurta set", "kurta pajama", "diwali"],
+      "recipe": {"mode": "ethnic", "slots": [
+        {"label": "a kurta set, or kurta with pajama", "kinds": ["ethnic_set", "kurta", "kurta_men"], "buy": {"category": "Kurta Set (Men)", "color": "emerald"}}
+      ]}
+    },
+    {
+      "id": "brooched", "name": "Brooched", "emoji": "📌", "gender": ["female", "male"], "category": "western",
+      "summary": "A brooch pinned to a jacket, blazer or Nehru jacket - small detail, big personality.",
+      "meaning": ["a blazer, jacket or Nehru jacket", "one brooch - vintage, heirloom or playful"],
+      "why": "Pinterest Predicts 2026 named 'Brooched'; as reported by FashionUnited, searches rose for 'brooch aesthetic' (+110%), 'brooch for men suit' (+90%) and 'heirloom jewelry' (+45%).",
+      "occasions": ["party", "wedding", "office"], "colors": [], "silhouettes": [],
+      "sources": ["pinterest_predicts26"], "keywords": ["brooch", "heirloom"],
+      "accessory_gap": {"label": "a brooch", "query": "brooch", "note": "Brooches aren't a wardrobe category yet, so we can't see if you own one."},
+      "recipe": {"slots": [
+        {"label": "a blazer, jacket or Nehru jacket", "kinds": ["blazer", "jacket", "coat", "nehru"], "buy": {"category": "Blazer", "color": "black"}}
+      ]}
+    }
+  ]
+}

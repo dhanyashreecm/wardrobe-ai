@@ -9,6 +9,8 @@ import ForgotPassword from "./pages/ForgotPassword";
 import Wardrobe from "./pages/Wardrobe";
 import Profile from "./pages/Profile";
 import VirtualTryOn from "./pages/VirtualTryOn";
+import StyleStudio from "./pages/StyleStudio";
+import OutfitCalendar from "./pages/OutfitCalendar";
 
 // Gender selection now lives directly on the Login page (see
 // Login.js) instead of a separate screen shown before it - "/" just
@@ -34,6 +36,8 @@ function App() {
         <Route path="/trip" element={<TripPlanner />} />
         <Route path="/profile" element={<Profile />} />
         <Route path="/tryon" element={<VirtualTryOn />} />
+        <Route path="/style" element={<StyleStudio />} />
+        <Route path="/calendar" element={<OutfitCalendar />} />
         {/* Anything else. Without this, a mistyped or stale URL renders
             a blank white page with no explanation and no way back -
             which is exactly what a visitor sees after a bookmark goes
