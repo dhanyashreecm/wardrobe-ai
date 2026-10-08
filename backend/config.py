@@ -246,6 +246,12 @@ SMTP_USERNAME = _get("SMTP_USERNAME")
 # included in an error message - see email_service._describe_failure.
 SMTP_PASSWORD = _get("SMTP_PASSWORD")
 
+# Google shows App Passwords as "abcd efgh ijkl mnop". The spaces are
+# only for readability - a real App Password never contains them - so
+# they are removed for Gmail rather than risk a rejected login.
+if "gmail" in SMTP_HOST.lower() or "googlemail" in SMTP_HOST.lower():
+    SMTP_PASSWORD = "".join(SMTP_PASSWORD.split())
+
 # What the recipient sees in their inbox as the sender's name.
 SMTP_FROM_NAME = _get("SMTP_FROM_NAME", "Wardrobe AI")
 

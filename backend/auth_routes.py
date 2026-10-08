@@ -20,6 +20,7 @@ The security rules, in one place:
     passwords lock the account for a few minutes (auth.verify_login).
 """
 
+import logging
 import threading
 import time
 from collections import defaultdict, deque
@@ -33,9 +34,12 @@ from backend.auth import (
     register_user,
     verify_login,
     create_password_reset_code,
+    cancel_password_reset_code,
     reset_password_with_code,
+    verify_password_reset_code,
     create_email_verification_code,
     verify_email_with_code,
+    validate_email_address,
     RESET_CODE_MINUTES,
     VERIFY_CODE_MINUTES,
 )
@@ -44,6 +48,10 @@ from backend.login_context import client_ip, describe_login
 
 
 auth_blueprint = Blueprint("auth_routes", __name__)
+
+# Uses email_service's logger, which prints to the backend terminal.
+# NEVER log a code, a password, or SMTP credentials through this.
+log = logging.getLogger("backend.email_service")
 
 
 # =========================================================
@@ -277,9 +285,55 @@ def login():
 # FORGOT PASSWORD
 # =========================================================
 
+GENERIC_RESET_MESSAGE = (
+    "If an account exists with this email, a password reset code has been sent. "
+    "Check your inbox and Spam folder. If you requested a code in the last minute, "
+    "use that one."
+)
+
+
+def deliver_password_reset(email):
+    """
+    The whole Forgot Password send, shared by the API route and by
+    `python -m backend.check_email EMAIL --send-reset`, so the diagnostic
+    tests exactly what users get.
+
+    Returns {"status": "no_account" | "too_soon" | "sent" | "send_failed",
+             "recipient": ..., "detail": ...}. Never contains the code.
+    """
+    result = create_password_reset_code(email)
+    status = result["status"]
+
+    if status == "no_account":
+        log.info("Password reset: account found: NO (%s) - no email sent", email)
+        return {"status": "no_account", "recipient": None, "detail": "no account"}
+
+    if status == "too_soon":
+        log.info("Password reset: account found: YES (%s) - a code was sent less than "
+                 "60s ago; it is still valid, no new email sent", email)
+        return {"status": "too_soon", "recipient": None, "detail": "throttled"}
+
+    recipient = result.get("email") or email
+    log.info("Password reset: account found: YES; code generated (not logged); "
+             "email recipient: %s", recipient)
+    sent, detail = email_service.send_password_reset_code_now(
+        result.get("name"), recipient, result["code"], RESET_CODE_MINUTES
+    )
+    if sent:
+        log.info("Password reset: email ACCEPTED by %s for %s", config.SMTP_HOST, recipient)
+        return {"status": "sent", "recipient": recipient, "detail": detail}
+
+    # Not delivered: forget this code so "Send again" works immediately.
+    cancel_password_reset_code(recipient)
+    log.warning("Password reset: email NOT sent to %s (%s) - code cancelled so the "
+                "user can retry at once", recipient, detail)
+    return {"status": "send_failed", "recipient": recipient, "detail": detail}
+
+
 @auth_blueprint.route("/api/password/forgot", methods=["POST"])
 def forgot_password():
     if _rate_limited("send_code"):
+        log.info("Password reset: rate limit hit for this client IP")
         return _too_many()
 
     email = normalize_email(_body().get("email"))
@@ -287,24 +341,52 @@ def forgot_password():
     if not email:
         return jsonify({"success": False, "message": "Enter your email address"}), 400
 
+    # Format only - says nothing about whether an account exists.
+    if validate_email_address(email):
+        return jsonify({"success": False,
+                        "message": "Please enter a valid email address"}), 400
+
+    log.info("Password reset requested for %s", email)
+
     if not config.email_configured():
+        log.warning("Password reset NOT sent: SMTP_USERNAME/SMTP_PASSWORD missing in .env")
         return jsonify({
             "success": False,
             "message": "Password reset by email isn't set up on the server yet."
         }), 503
 
-    result = create_password_reset_code(email)
-    if result["status"] == "ok":
-        email_service.send_password_reset_code(
-            result.get("name"), email, result["code"], RESET_CODE_MINUTES
-        )
+    outcome = deliver_password_reset(email)
+
+    if outcome["status"] == "send_failed":
+        # Only reachable for a real account while the mail server is
+        # failing; telling the user beats a "sent" message for an email
+        # that will never arrive.
+        return jsonify({
+            "success": False,
+            "code": "email_send_failed",
+            "message": "We couldn't send the reset email right now. "
+                       "Please try again in a few minutes.",
+        }), 502
 
     # Same answer whether or not the account exists.
-    return jsonify({
-        "success": True,
-        "message": "If an account exists for this email, a 6-digit code has been sent. "
-                   "Check your inbox (and spam)."
-    }), 200
+    return jsonify({"success": True, "message": GENERIC_RESET_MESSAGE}), 200
+
+
+@auth_blueprint.route("/api/password/verify-code", methods=["POST"])
+def verify_reset_code():
+    """Checks the emailed 6-digit code before the new-password form is shown."""
+    if _rate_limited("verify"):
+        return _too_many()
+
+    data = _body()
+    email = normalize_email(data.get("email"))
+    code = str(data.get("code") or "").strip()
+
+    if not email or not code:
+        return jsonify({"success": False, "message": "Email and code are required"}), 400
+
+    result = verify_password_reset_code(email, code)
+    return jsonify(result), (200 if result["success"] else 400)
 
 
 @auth_blueprint.route("/api/password/reset", methods=["POST"])

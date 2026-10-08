@@ -49,6 +49,17 @@ from backend import config
 
 logger = logging.getLogger(__name__)
 
+# The app never calls logging.basicConfig(), so without this the INFO
+# lines below ("Email sending started", "... successful") were silently
+# dropped and only failures ever reached the terminal. A handler on
+# THIS logger only - the rest of the app's output is unchanged.
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("[email] %(levelname)s %(message)s"))
+    logger.addHandler(_handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
 
 # How long to wait for the mail server before giving up. Short on
 # purpose: this runs on a background thread, but a thread stuck for
@@ -93,6 +104,8 @@ def _describe_failure(error):
         return "could not connect to the mail server"
 
     if isinstance(error, smtplib.SMTPServerDisconnected):
+        if "timed out" in str(error).lower():
+            return "the mail server did not respond in time"
         return "the mail server closed the connection"
 
     if isinstance(error, TimeoutError):
@@ -102,6 +115,35 @@ def _describe_failure(error):
         return "the mail server could not be reached over the network"
 
     return f"an unexpected {type(error).__name__} while sending"
+
+
+def _server_reply(error):
+    """
+    The mail server's own reply code and text (e.g. "535 5.7.8 Username
+    and Password not accepted"), for the server log only - that text is
+    what actually says WHY Gmail refused. Any occurrence of the SMTP
+    password is blanked out first, and the length is capped.
+    """
+    code = getattr(error, "smtp_code", None)
+    text = getattr(error, "smtp_error", None)
+    if isinstance(text, bytes):
+        text = text.decode("utf-8", "replace")
+    if text is None and isinstance(error, smtplib.SMTPRecipientsRefused):
+        text = "; ".join(
+            f"{addr}: {c} {m.decode('utf-8', 'replace') if isinstance(m, bytes) else m}"
+            for addr, (c, m) in error.recipients.items()
+        )
+    if not text and code is None:
+        # No SMTP reply (disconnect, timeout, network error): the
+        # exception's own message is what tells these apart.
+        text = str(error)
+        if not text:
+            return ""
+    text = " ".join(str(text or "").split())
+    for secret in {config.SMTP_PASSWORD, "".join((config.SMTP_PASSWORD or "").split())}:
+        if secret:
+            text = text.replace(secret, "[redacted]")
+    return f" (server said: {code or ''} {text[:300]})".replace("  ", " ")
 
 
 def send_email(to_address, subject, text_body, html_body=None):
@@ -126,6 +168,10 @@ def send_email(to_address, subject, text_body, html_body=None):
     if html_body:
         message.add_alternative(html_body, subtype="html")
 
+    logger.info("Email sending started: '%s' to %s via %s:%s",
+                subject, to_address, config.SMTP_HOST, config.SMTP_PORT)
+
+    stage = "connect"
     try:
         if config.SMTP_USE_SSL:
             server = smtplib.SMTP_SSL(
@@ -138,17 +184,26 @@ def send_email(to_address, subject, text_body, html_body=None):
 
         with server:
             if not config.SMTP_USE_SSL:
+                stage = "STARTTLS"
                 server.starttls()
 
+            stage = "AUTH"
             server.login(config.SMTP_USERNAME, config.SMTP_PASSWORD)
-            server.send_message(message)
+            stage = "send"
+            refused = server.send_message(message, to_addrs=[to_address])
+
+        if refused:
+            raise smtplib.SMTPRecipientsRefused(refused)
 
     except Exception as error:  # noqa: BLE001 - nothing here may escape
         detail = _describe_failure(error)
-        logger.warning("Could not send '%s' to %s: %s", subject, to_address, detail)
+        logger.warning("Email sending FAILED at %s: '%s' to %s: %s [%s]%s",
+                       stage, subject, to_address, detail, type(error).__name__,
+                       _server_reply(error))
         return False, detail
 
-    logger.info("Sent '%s' to %s", subject, to_address)
+    logger.info("Email sending successful: '%s' to %s (accepted by %s)",
+                subject, to_address, config.SMTP_HOST)
     return True, "sent"
 
 
@@ -277,37 +332,68 @@ def send_signin_email(name, email_address, when=None):
     return send_async(email_address, subject, text_body, html_body)
 
 
-def send_password_reset_code(name, email_address, code, minutes):
+def build_password_reset_email(name, code, minutes):
     """
-    Sent when someone uses "Forgot password". Carries the 6-digit
-    code only - never a password.
+    (subject, text_body, html_body) for "Forgot password". Carries the
+    6-digit code only - never a password. The code is deliberately NOT
+    in the subject line, so it doesn't show on lock-screen previews.
     """
-    safe_name = html.escape((name or "there").strip() or "there")
     plain_name = (name or "there").strip() or "there"
+    safe_name = html.escape(plain_name)
+    safe_code = html.escape(str(code))
+    minutes = int(minutes)
 
-    subject = f"Your Wardrobe AI reset code: {code}"
+    subject = "Wardrobe AI Password Reset Code"
 
     text_body = (
         f"Hi {plain_name},\n\n"
-        f"Your password reset code is: {code}\n\n"
-        f"It expires in {minutes} minutes.\n\n"
-        "If you didn't ask to reset your password, ignore this email - "
-        "your password stays the same.\n\n"
-        "- Wardrobe AI\n"
+        "We received a request to reset the password for your Wardrobe AI "
+        "account.\n\n"
+        f"Your verification code is:\n\n    {code}\n\n"
+        f"This code expires in {minutes} minutes and can only be used once.\n\n"
+        "Security tip: Wardrobe AI will never ask you for this code by phone, "
+        "chat or email. Don't share it with anyone.\n\n"
+        "If you didn't request a password reset, you can safely ignore this "
+        "email - your password will not change.\n\n"
+        "Thank you,\nWardrobe AI Security Team\n"
     )
 
-    html_body = _shell(
-        f"Reset your password, {safe_name}",
-        [
-            "Enter this code in the app to choose a new password:",
-            f'<span style="font-size:28px;font-weight:700;letter-spacing:6px;">{code}</span>',
-            f"It expires in {minutes} minutes.",
-            "If you didn&#39;t ask to reset your password, ignore this email - "
-            "your password stays the same.",
-        ],
+    inner = (
+        f'<p style="margin:0 0 14px;line-height:1.55;">Hi {safe_name},</p>'
+        f'<p style="margin:0 0 14px;line-height:1.55;">We received a request to reset '
+        f'the password for your Wardrobe AI account. Enter this code in the app:</p>'
+        f'<p style="margin:0 0 14px;font-size:30px;font-weight:700;letter-spacing:8px;">'
+        f'{safe_code}</p>'
+        f'<p style="margin:0 0 14px;line-height:1.55;">This code expires in {minutes} '
+        f'minutes and can only be used once.</p>'
+        f'<div style="margin:0 0 14px;padding:12px 14px;background:#fdf1ea;'
+        f'border-left:4px solid #c1694f;border-radius:6px;line-height:1.5;">'
+        f'<strong>Security tip:</strong> Wardrobe AI will never ask you for this code '
+        f'by phone, chat or email. Don&#39;t share it with anyone.</div>'
+        f'<p style="margin:0 0 14px;line-height:1.55;color:#6b6862;">If you didn&#39;t '
+        f'request a password reset, you can safely ignore this email - your password '
+        f'will not change.</p>'
     )
 
+    return subject, text_body, _branded("Password reset code", inner,
+                                        "Wardrobe AI Security Team")
+
+
+def send_password_reset_code(name, email_address, code, minutes):
+    """Background send of the reset code to the account owner's address."""
+    subject, text_body, html_body = build_password_reset_email(name, code, minutes)
     return send_async(email_address, subject, text_body, html_body)
+
+
+def send_password_reset_code_now(name, email_address, code, minutes):
+    """
+    Sends the reset code and WAITS for Gmail's answer. Returns
+    (sent, detail). Forgot Password uses this - not the background
+    send - so a failure is reported to the user instead of the screen
+    saying "code sent" while nothing was sent.
+    """
+    subject, text_body, html_body = build_password_reset_email(name, code, minutes)
+    return send_email(email_address, subject, text_body, html_body)
 
 
 # ============================================================

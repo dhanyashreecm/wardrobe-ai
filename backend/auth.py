@@ -499,15 +499,33 @@ def create_password_reset_code(email):
             "reset_requested_at": now,
         }}
     )
-    return {"status": "ok", "code": code, "name": user.get("name")}
+    # The address ON THE ACCOUNT, so the code always goes to the
+    # account owner's mailbox (never to an admin/sender address).
+    return {"status": "ok", "code": code, "name": user.get("name"),
+            "email": normalize_email(user.get("email")) or normalize_email(email)}
 
 
-def reset_password_with_code(email, code, new_password):
-    if not new_password or len(new_password) < MIN_PASSWORD_LENGTH:
-        return {"success": False,
-                "message": f"New password must be at least {MIN_PASSWORD_LENGTH} characters"}
-
+def cancel_password_reset_code(email):
+    """
+    Forgets a reset code whose email could NOT be delivered, including
+    the "requested at" time - otherwise the 60-second resend throttle
+    would silently swallow the user's very next "Send again".
+    """
     user = find_user_by_email(email)
+    if user:
+        users_collection.update_one(
+            {"_id": user["_id"]},
+            {"$unset": {"reset_code_hash": "", "reset_expires_at": "",
+                        "reset_attempts": "", "reset_requested_at": ""}}
+        )
+
+
+def _check_reset_code(user, code):
+    """
+    None when `code` is the valid, unexpired, unused reset code for
+    `user`; otherwise the error dict to return. A wrong guess counts
+    towards RESET_MAX_ATTEMPTS whichever step it was made at.
+    """
     invalid = {"success": False, "message": "Invalid or expired code. Request a new one."}
 
     if not user or not user.get("reset_code_hash"):
@@ -526,6 +544,32 @@ def reset_password_with_code(email, code, new_password):
         return {"success": False,
                 "message": f"Wrong code. {left} attempt(s) left." if left > 0
                            else "Too many wrong codes. Request a new one."}
+
+    return None
+
+
+def verify_password_reset_code(email, code):
+    """
+    Step 2 of Forgot Password: checks the emailed code WITHOUT using
+    it up, so the app can then show the "new password" form. The code
+    is checked again (and only then consumed) by
+    reset_password_with_code() when the new password is submitted.
+    """
+    problem = _check_reset_code(find_user_by_email(email), code)
+    if problem:
+        return problem
+    return {"success": True, "message": "Code verified. Choose a new password."}
+
+
+def reset_password_with_code(email, code, new_password):
+    if not new_password or len(new_password) < MIN_PASSWORD_LENGTH:
+        return {"success": False,
+                "message": f"New password must be at least {MIN_PASSWORD_LENGTH} characters"}
+
+    user = find_user_by_email(email)
+    problem = _check_reset_code(user, code)
+    if problem:
+        return problem
 
     users_collection.update_one(
         {"_id": user["_id"]},
