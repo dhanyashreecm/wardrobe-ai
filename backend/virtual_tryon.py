@@ -862,8 +862,14 @@ class HuggingFaceSpaceProvider(VirtualTryOnProvider):
         # value is "flat-lay". The self-hosted app in spaces/tryon/ does
         # not take the argument, so it is only sent to an endpoint that
         # declares it - both hosts keep working.
-        if "garment_photo_type" in _endpoint_parameters(client):
+        declared = _endpoint_parameters(client)
+        if "garment_photo_type" in declared:
             arguments["garment_photo_type"] = config.TRYON_GARMENT_PHOTO_TYPE
+        # Erase the person's current clothes before fitting the new
+        # garment (see config.TRYON_SEGMENTATION_FREE). Sent only to an
+        # endpoint that declares it, so older hosts keep working.
+        if "segmentation_free" in declared:
+            arguments["segmentation_free"] = bool(getattr(config, "TRYON_SEGMENTATION_FREE", False))
 
         try:
             job = client.submit(api_name=TRYON_API_NAME, **arguments)

@@ -139,7 +139,11 @@ PHOTO_TYPES = ["model", "flat-lay"]
 LOCK = threading.Lock()
 
 
-def try_on(person_image, garment_image, category, garment_photo_type="flat-lay"):
+def try_on(person_image, garment_image, category, garment_photo_type="flat-lay",
+           segmentation_free=False):
+    # segmentation_free=False: the person's current garment is masked out
+    # first, so a longer/untucked original shirt can't show under the new
+    # top. True keeps the old behaviour (draw over the original clothes).
     if person_image is None or garment_image is None:
         raise gr.Error("A person photo and a garment image are both required.")
     if category not in CATEGORIES:
@@ -159,7 +163,7 @@ def try_on(person_image, garment_image, category, garment_photo_type="flat-lay")
             num_timesteps=30,
             guidance_scale=1.5,
             seed=42,
-            segmentation_free=True,
+            segmentation_free=bool(segmentation_free),
             )
         except Exception as error:  # noqa: BLE001
             publish(f"run:error {type(error).__name__}: {str(error)[:200]}")
@@ -195,8 +199,9 @@ with gr.Blocks(title="Wardrobe-AI Try-On (Kaggle)") as demo:
         output = gr.Image(type="pil", format="png", label="Result")
     category = gr.Dropdown(CATEGORIES, value="tops", label="Category")
     photo_type = gr.Dropdown(PHOTO_TYPES, value="flat-lay", label="Garment photo type")
+    seg_free = gr.Checkbox(value=False, label="Segmentation free (keep original clothes)")
     gr.Button("Try on").click(
-        try_on, inputs=[person, garment, category, photo_type],
+        try_on, inputs=[person, garment, category, photo_type, seg_free],
         outputs=output, api_name="try_on",
     )
 

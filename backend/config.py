@@ -362,6 +362,14 @@ except ValueError:
 # is what the wardrobe stores after background removal - or "model"
 # for a garment photographed being worn.
 TRYON_GARMENT_PHOTO_TYPE = _get("TRYON_GARMENT_PHOTO_TYPE", "flat-lay") or "flat-lay"
+
+# FASHN VTON "segmentation_free": True draws the new garment straight
+# over the photo WITHOUT erasing what the person is wearing - so a
+# longer or untucked original shirt shows under a shorter new top (the
+# "old outfit overlapping" bug). False first removes the original
+# garment region, which FASHN recommends whenever original clothes are
+# not removed properly. Default False; set true only for bulky garments.
+TRYON_SEGMENTATION_FREE = (_get("TRYON_SEGMENTATION_FREE", "false") or "false").strip().lower() in ("1", "true", "yes")
 if TRYON_GARMENT_PHOTO_TYPE not in ("flat-lay", "model"):
     TRYON_GARMENT_PHOTO_TYPE = "flat-lay"
 
