@@ -71,6 +71,10 @@ function AddItemModal({ onClose, onSaved, sections, autoCategory, categoryError 
   const [preview, setPreview] = useState(null);
   const [crop, setCrop] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
+  // Crop shape. Starts as the photo's OWN shape so the whole garment
+  // (e.g. full-length jeans) fits; 3:4 and square are optional.
+  const [natural, setNatural] = useState(3 / 4);
+  const [aspectMode, setAspectMode] = useState("whole");
   const [area, setArea] = useState(null);
   const [category, setCategory] = useState("");
   const [color, setColor] = useState("");
@@ -93,6 +97,7 @@ function AddItemModal({ onClose, onSaved, sections, autoCategory, categoryError 
     setSrc(URL.createObjectURL(chosen));
     setCrop({ x: 0, y: 0 });
     setZoom(1);
+    setAspectMode("whole");
     setStep("crop");
   };
 
@@ -194,8 +199,19 @@ function AddItemModal({ onClose, onSaved, sections, autoCategory, categoryError 
         {step === "crop" && src && (
           <>
             <div className="aw-cropbox">
-              <Cropper image={src} crop={crop} zoom={zoom} aspect={3 / 4}
+              <Cropper image={src} crop={crop} zoom={zoom}
+                aspect={aspectMode === "whole" ? natural : aspectMode === "square" ? 1 : 3 / 4}
+                onMediaLoaded={(m) => m.naturalWidth && m.naturalHeight && setNatural(m.naturalWidth / m.naturalHeight)}
                 onCropChange={setCrop} onCropComplete={(_, px) => setArea(px)} onZoomChange={setZoom} />
+            </div>
+            <div className="aw-crop-shapes" role="group" aria-label="Crop shape">
+              {[["whole", "Whole photo"], ["portrait", "3:4"], ["square", "Square"]].map(([key, label]) => (
+                <button type="button" key={key} aria-pressed={aspectMode === key}
+                  className={`aw-btn aw-btn-sm ${aspectMode === key ? "" : "aw-btn-soft"}`}
+                  onClick={() => { setAspectMode(key); setZoom(1); setCrop({ x: 0, y: 0 }); }}>
+                  {label}
+                </button>
+              ))}
             </div>
             <label className="aw-zoom">
               Zoom

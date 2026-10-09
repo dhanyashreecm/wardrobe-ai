@@ -217,6 +217,12 @@ def start(hours, wait_minutes, accelerator, user=""):
         urls = [m[4:] for m in messages if m.startswith("url:")]
         if urls and _answers(urls[-1]):
             set_env({"TRYON_FALLBACK_URL": urls[-1], "TRYON_PROVIDERS": PROVIDER_ORDER})
+            try:  # so the cloud server (phone app) uses the new GPU too
+                from backend import app_settings
+                app_settings.put("tryon_gpu_url", urls[-1])
+                print("Saved the GPU address to the shared database for the phone app's server.")
+            except Exception as error:  # noqa: BLE001
+                print(f"(Couldn't save the GPU address to the database: {type(error).__name__})")
             print("\nReady. .env now points TRYON_FALLBACK_URL at the Kaggle GPU.")
             print(f"It stays up for {hours} h. Restart the backend to pick it up:")
             print("    ./ai_env312/bin/python -m backend.app")

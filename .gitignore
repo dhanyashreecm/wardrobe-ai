@@ -90,3 +90,14 @@ setup_vto_demo.command
 scripts/vto_demo_assets/
 spaces/tryon/kaggle_kernel/.last_launch.json
 push_changes.command
+
+# Android app build outputs (mobile/) - the source project is committed
+mobile/node_modules/
+mobile/android/.gradle/
+mobile/android/build/
+mobile/android/app/build/
+mobile/android/local.properties
+mobile/android/app/src/main/assets/public/
+mobile/android/capacitor-cordova-android-plugins/build/
+*.apk
+push_mobile.command

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Wardrobe AI</string>
+    <string name="title_activity_main">Wardrobe AI</string>
+    <string name="package_name">com.wardrobeai.app</string>
+    <string name="custom_url_scheme">com.wardrobeai.app</string>
+</resources>

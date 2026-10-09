@@ -18,8 +18,28 @@
 // DATABASE and the IMAGE STORAGE (both configured in the backend's own
 // .env), not the backend process itself.
 
-export const API_URL =
-  process.env.REACT_APP_API_URL || "http://localhost:5001";
+// Inside the phone app (APK) the server address can also be set on the
+// login screen ("Server" link) and is remembered on the phone, so one APK
+// keeps working if the backend ever moves. See components/ServerSettings.
+export const SERVER_KEY = "server_url";
+
+function savedServer() {
+  try {
+    const value = localStorage.getItem(SERVER_KEY) || "";
+    return /^https?:\/\/[^\s]+$/.test(value) ? value.replace(/\/+$/, "") : "";
+  } catch {
+    return "";
+  }
+}
+
+export const DEFAULT_API_URL = process.env.REACT_APP_API_URL || "http://localhost:5001";
+export const API_URL = savedServer() || DEFAULT_API_URL;
+
+// True inside the installed Android/iOS app (Capacitor), false in a browser.
+export const IS_NATIVE_APP = Boolean(
+  typeof window !== "undefined" && window.Capacitor && window.Capacitor.isNativePlatform
+  && window.Capacitor.isNativePlatform()
+);
 
 // Builds a loadable <img src> from whatever the backend stored.
 //

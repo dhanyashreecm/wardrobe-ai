@@ -62,3 +62,4 @@
   .st-cal-day img { width: 26px; height: 32px; }
   .st-outfits, .st-trends, .st-gaps { grid-template-columns: 1fr; }
 }
+.aw-crop-shapes { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 4px; }

@@ -1,0 +1,11 @@
+{
+  "appId": "com.wardrobeai.app",
+  "appName": "Wardrobe AI",
+  "webDir": "../frontend/build",
+  "android": {
+    "allowMixedContent": false
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}

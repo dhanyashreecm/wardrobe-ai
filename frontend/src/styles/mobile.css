@@ -1,0 +1,63 @@
+/* ===== Phone layout (AI Wardrobe app) - cream/ivory + dusty rose ===== */
+.m-topbar, .m-tabbar, .m-sheet-wrap { display: none; }
+
+@media (max-width: 760px) {
+  .app-shell { flex-direction: column; }
+  .m-topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    position: sticky; top: 0; z-index: 40;
+    padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
+    background: rgba(250, 246, 241, 0.92); backdrop-filter: blur(10px);
+    border-bottom: 1px solid #ece1d6;
+  }
+  .m-brand { display: flex; align-items: center; gap: 8px; text-decoration: none; color: #2a2118;
+    font-family: "Playfair Display", "Fraunces", serif; font-size: 20px; }
+  .m-top-btn { font-size: 20px; text-decoration: none; padding: 4px 6px; }
+  .app-content { padding: 16px 14px calc(92px + env(safe-area-inset-bottom)) !important; }
+
+  .m-tabbar {
+    display: grid; grid-template-columns: repeat(5, 1fr);
+    position: fixed; left: 10px; right: 10px; bottom: calc(10px + env(safe-area-inset-bottom)); z-index: 50;
+    background: #fffdf9; border: 1px solid #ecdcd2; border-radius: 22px;
+    box-shadow: 0 10px 30px rgba(42, 33, 24, 0.16); padding: 6px 4px;
+  }
+  .m-tabbar a, .m-tabbar button {
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    font-size: 11px; font-weight: 600; color: #8a7a6d; text-decoration: none;
+    background: none; border: 0; padding: 6px 0; border-radius: 16px; font-family: inherit; cursor: pointer;
+  }
+  .m-tabbar .m-ico { font-size: 20px; line-height: 1; }
+  .m-tabbar .on { color: #a2543d; background: #f3e0d8; }
+
+  .m-sheet-wrap { display: block; position: fixed; inset: 0; z-index: 60; background: rgba(42, 33, 24, 0.35); }
+  .m-sheet {
+    position: absolute; left: 0; right: 0; bottom: 0; background: #fffdf9;
+    border-radius: 24px 24px 0 0; padding: 10px 16px calc(24px + env(safe-area-inset-bottom));
+    display: flex; flex-direction: column; gap: 4px; animation: m-up .18s ease-out;
+  }
+  .m-grip { width: 42px; height: 5px; border-radius: 99px; background: #e2d4c8; margin: 4px auto 10px; }
+  .m-sheet a, .m-sheet button {
+    display: flex; align-items: center; gap: 14px; padding: 14px 12px; border-radius: 14px;
+    font-size: 16px; color: #2a2118; text-decoration: none; background: none; border: 0;
+    font-family: inherit; text-align: left; cursor: pointer;
+  }
+  .m-sheet a span, .m-sheet button span { font-size: 20px; width: 26px; text-align: center; }
+  .m-sheet .on { background: #f3e0d8; }
+  .m-sheet button { background: none !important; color: #a2543d !important; box-shadow: none !important; font-weight: 600; }
+  @keyframes m-up { from { transform: translateY(40px); opacity: .4; } to { transform: none; opacity: 1; } }
+
+  /* comfortable tap targets + no sideways scrolling */
+  body { overflow-x: hidden; }
+  .aw-btn, button { min-height: 40px; }
+  input, select, textarea { font-size: 16px !important; } /* stops iOS/Android zoom on focus */
+}
+
+/* login "Server" setting (phone app) */
+.server-settings { margin-top: 14px; text-align: center; }
+.server-link { background: none !important; border: 0; color: #8a7a6d !important; font-size: 13px; cursor: pointer; box-shadow: none !important; width: auto !important; padding: 4px 8px !important; }
+.server-box { text-align: left; background: #faf3ec; border-radius: 14px; padding: 12px; margin-top: 6px; }
+.server-box label { font-size: 12px; color: #8a7a6d; }
+.server-box input { width: 100%; margin: 6px 0; }
+.server-actions { display: flex; gap: 8px; }
+.server-actions button { flex: 1; padding: 8px !important; font-size: 13px; }
+.server-status { font-size: 13px; margin: 8px 0 0; }

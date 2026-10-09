@@ -3,6 +3,7 @@ import axios from "axios";
 import { useNavigate, Link } from "react-router-dom";
 import "../App.css";
 import { API_URL } from "../config";
+import ServerSettings from "../components/ServerSettings";
 
 // Shown on the Login page purely as a convenience PRE-FILL for the
 // Register screen (this is where a NEW account's choice is actually
@@ -174,6 +175,7 @@ function Login() {
                         ? "2px solid #c1694f"
                         : "2px solid #ece1d6",
                       background: selected ? "#fdf1ea" : "#fffaf5",
+                      color: "#2a2118",
                       cursor: "pointer",
                       fontFamily: "inherit",
                       fontWeight: selected ? 700 : 500
@@ -296,6 +298,7 @@ function Login() {
                         ? "2px solid #c1694f"
                         : "2px solid #ece1d6",
                       background: selected ? "#fdf1ea" : "#fffaf5",
+                      color: "#2a2118",
                       cursor: "pointer",
                       fontFamily: "inherit",
                       fontWeight: selected ? 700 : 500
@@ -337,6 +340,7 @@ function Login() {
               {loading ? "Logging in..." : "Login →"}
             </button>
           </form>
+          <ServerSettings />
 
           {error && <p className="error">{error}</p>}
 

@@ -1127,7 +1127,14 @@ class SelfHostedGradioProvider(HuggingFaceSpaceProvider):
 
     @property
     def host(self):
-        return self._host if self._host is not None else (config.TRYON_FALLBACK_URL or "")
+        if self._host is not None:
+            return self._host
+        # On the cloud server the GPU address comes from the database,
+        # where every `kaggle_tryon start` records the newest one.
+        from backend import app_settings
+        if app_settings.gpu_url_from_db_enabled():
+            return app_settings.get("tryon_gpu_url") or config.TRYON_FALLBACK_URL or ""
+        return config.TRYON_FALLBACK_URL or ""
 
     @property
     def token(self):
