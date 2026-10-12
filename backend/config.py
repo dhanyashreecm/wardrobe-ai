@@ -370,6 +370,11 @@ TRYON_GARMENT_PHOTO_TYPE = _get("TRYON_GARMENT_PHOTO_TYPE", "flat-lay") or "flat
 # garment region, which FASHN recommends whenever original clothes are
 # not removed properly. Default False; set true only for bulky garments.
 TRYON_SEGMENTATION_FREE = (_get("TRYON_SEGMENTATION_FREE", "false") or "false").strip().lower() in ("1", "true", "yes")
+# Bottoms need the opposite: with the old clothes erased first, FASHN
+# v1.5 left the lower body unchanged (a dress stayed a dress and the
+# trousers never appeared). Tested on real photos 2026-10-12: drawing
+# the trousers straight onto the photo is what actually puts them on.
+TRYON_SEGMENTATION_FREE_BOTTOMS = (_get("TRYON_SEGMENTATION_FREE_BOTTOMS", "true") or "true").strip().lower() in ("1", "true", "yes")
 if TRYON_GARMENT_PHOTO_TYPE not in ("flat-lay", "model"):
     TRYON_GARMENT_PHOTO_TYPE = "flat-lay"
 

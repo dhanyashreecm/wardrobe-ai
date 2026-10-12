@@ -718,6 +718,20 @@ def _endpoint_parameters(client):
         return set()
 
 
+def segmentation_free_for(model_category):
+    """
+    Whether FASHN should draw the garment straight onto the photo
+    (True) or erase the person's current garment first (False).
+
+    Tops and dresses: erase first, so a longer old shirt can't show
+    under the new one. Bottoms: draw directly - with erasing on, the
+    model left the legs unchanged and the trousers never appeared.
+    """
+    if model_category == "bottoms":
+        return bool(getattr(config, "TRYON_SEGMENTATION_FREE_BOTTOMS", True))
+    return bool(getattr(config, "TRYON_SEGMENTATION_FREE", False))
+
+
 def _gradio_client_installed():
     try:
         import importlib.util
@@ -869,7 +883,7 @@ class HuggingFaceSpaceProvider(VirtualTryOnProvider):
         # garment (see config.TRYON_SEGMENTATION_FREE). Sent only to an
         # endpoint that declares it, so older hosts keep working.
         if "segmentation_free" in declared:
-            arguments["segmentation_free"] = bool(getattr(config, "TRYON_SEGMENTATION_FREE", False))
+            arguments["segmentation_free"] = segmentation_free_for(model_category)
 
         try:
             job = client.submit(api_name=TRYON_API_NAME, **arguments)

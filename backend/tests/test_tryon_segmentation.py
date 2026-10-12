@@ -17,7 +17,7 @@ class _Client:
 
 
 class SegmentationFreeTests(unittest.TestCase):
-    def _submit(self, declared, setting):
+    def _submit(self, declared, setting, category="tops", bottoms=True):
         client = _Client()
         fake_gradio = types.ModuleType("gradio_client")
         fake_gradio.handle_file = lambda path: path
@@ -26,8 +26,9 @@ class SegmentationFreeTests(unittest.TestCase):
                 mock.patch.object(provider, "available", return_value=True), \
                 mock.patch.object(provider, "_client", return_value=client), \
                 mock.patch.object(virtual_tryon, "_endpoint_parameters", return_value=declared), \
-                mock.patch.object(config, "TRYON_SEGMENTATION_FREE", setting, create=True):
-            provider.submit(b"person", b"garment", "tops")
+                mock.patch.object(config, "TRYON_SEGMENTATION_FREE", setting, create=True), \
+                mock.patch.object(config, "TRYON_SEGMENTATION_FREE_BOTTOMS", bottoms, create=True):
+            provider.submit(b"person", b"garment", category)
         return client.kwargs
 
     def test_original_clothes_are_erased_by_default(self):
@@ -38,6 +39,15 @@ class SegmentationFreeTests(unittest.TestCase):
     def test_setting_can_switch_it_back(self):
         args = self._submit({"segmentation_free"}, True)
         self.assertIs(args["segmentation_free"], True)
+
+    def test_bottoms_are_drawn_directly_so_trousers_appear(self):
+        self.assertTrue(config.TRYON_SEGMENTATION_FREE_BOTTOMS)
+        args = self._submit({"segmentation_free"}, False, category="bottoms")
+        self.assertIs(args["segmentation_free"], True)
+
+    def test_dresses_still_erase_the_old_outfit(self):
+        args = self._submit({"segmentation_free"}, False, category="one-pieces")
+        self.assertIs(args["segmentation_free"], False)
 
     def test_hosts_without_the_option_are_not_sent_it(self):
         args = self._submit({"garment_photo_type"}, False)

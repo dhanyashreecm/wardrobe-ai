@@ -101,3 +101,5 @@ mobile/android/app/src/main/assets/public/
 mobile/android/capacitor-cordova-android-plugins/build/
 *.apk
 push_mobile.command
+tools/
+start_phone_access.command
