@@ -156,6 +156,8 @@
   display: block;
 }
 .tryon-camera-frame video.mirrored { transform: scaleX(-1); }
+/* sideways phone stream: show the upright centre that will be captured */
+.tryon-camera-frame video.portrait-crop { object-fit: cover; }
 .tryon-camera-guide {
   position: absolute;
   inset: 6% 22%;

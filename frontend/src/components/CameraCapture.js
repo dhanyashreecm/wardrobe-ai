@@ -16,7 +16,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * view.
  */
 
-const MAX_SIDE = 2048;      // plenty for the try-on model, keeps uploads sane
+const MAX_SIDE = 2048;
+
+// The part of the camera frame that becomes the photo: the whole frame
+// when it is already upright, otherwise its centred 3:4 portrait slice.
+export function portraitRegion(videoWidth, videoHeight) {
+  if (videoWidth <= videoHeight) return { x: 0, y: 0, w: videoWidth, h: videoHeight };
+  const w = Math.round((videoHeight * 3) / 4);
+  return { x: Math.round((videoWidth - w) / 2), y: 0, w, h: videoHeight };
+}      // plenty for the try-on model, keeps uploads sane
 const JPEG_QUALITY = 0.92;  // high - VTO quality matters more than bytes
 
 export const CAMERA_UNAVAILABLE =
@@ -55,6 +63,10 @@ export default function CameraCapture({ onUse, onCancel, onUnavailable, disabled
   const [error, setError] = useState("");
   const [captured, setCaptured] = useState(null); // { blob, url, width, height }
   const [useTimer, setUseTimer] = useState(true);
+  // Phone cameras often deliver a sideways (landscape) stream even when
+  // portrait is requested. Then the centre is shown and captured as an
+  // upright 3:4 photo, so the try-on always gets a vertical picture.
+  const [wideStream, setWideStream] = useState(false);
   const [countdown, setCountdown] = useState(0);
 
   const stopStream = useCallback(() => {
@@ -83,6 +95,7 @@ export default function CameraCapture({ onUse, onCancel, onUnavailable, disabled
           // nearest the camera supports. Nothing is cropped either way.
           width: { ideal: 1080 },
           height: { ideal: 1920 },
+          aspectRatio: { ideal: 3 / 4 },
         },
       });
       streamRef.current = stream;
@@ -117,15 +130,18 @@ export default function CameraCapture({ onUse, onCancel, onUnavailable, disabled
       setError("Couldn't capture a photo - the camera isn't ready yet. Please try again.");
       return;
     }
-    const scale = Math.min(1, MAX_SIDE / Math.max(video.videoWidth, video.videoHeight));
-    const width = Math.round(video.videoWidth * scale);
-    const height = Math.round(video.videoHeight * scale);
+    const region = portraitRegion(video.videoWidth, video.videoHeight);
+    const scale = Math.min(1, MAX_SIDE / Math.max(region.w, region.h));
+    const width = Math.round(region.w * scale);
+    const height = Math.round(region.h * scale);
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
     const ctx = canvas.getContext("2d");
     ctx.imageSmoothingQuality = "high";
-    ctx.drawImage(video, 0, 0, width, height); // un-mirrored, uncropped, unfiltered
+    // Un-mirrored and unfiltered; a sideways stream keeps only its
+    // upright 3:4 centre - exactly what the preview showed.
+    ctx.drawImage(video, region.x, region.y, region.w, region.h, 0, 0, width, height);
     canvas.toBlob((blob) => {
       if (!blob || blob.size < 1000) {
         setError("Couldn't capture a photo. Please try again.");
@@ -211,7 +227,9 @@ export default function CameraCapture({ onUse, onCancel, onUnavailable, disabled
               playsInline
               muted
               autoPlay
-              className={facing === "user" ? "mirrored" : ""}
+              className={[facing === "user" ? "mirrored" : "", wideStream ? "portrait-crop" : ""].join(" ").trim()}
+              onLoadedMetadata={(e) => setWideStream(e.target.videoWidth > e.target.videoHeight)}
+              onResize={(e) => setWideStream(e.target.videoWidth > e.target.videoHeight)}
               data-testid="camera-video"
             />
             <div className="tryon-camera-guide" aria-hidden="true" />
