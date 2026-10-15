@@ -41,4 +41,6 @@
     <!-- Virtual Try-On "Take Photo" and adding clothes with the camera -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <!-- Gallery on Android 12 and older (13+ uses the system photo picker, no permission needed) -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
 </manifest>

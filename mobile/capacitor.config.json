@@ -3,9 +3,18 @@
   "appName": "Wardrobe AI",
   "webDir": "../frontend/build",
   "android": {
-    "allowMixedContent": false
+    "allowMixedContent": false,
+    "adjustMarginsForEdgeToEdge": "auto"
   },
   "server": {
     "androidScheme": "https"
-  }
+  },
+  "plugins": {
+    "StatusBar": {
+      "overlaysWebView": false,
+      "style": "LIGHT",
+      "backgroundColor": "#FAF5F0"
+    }
+  },
+  "backgroundColor": "#FAF5F0"
 }

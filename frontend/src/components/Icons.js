@@ -41,3 +41,33 @@ export const LogoutIcon = (p) => (
 export const PlusIcon = (p) => (
   <svg {...base} {...p}><path d="M12 5v14M5 12h14" /></svg>
 );
+export const CameraIcon = (p) => (
+  <svg {...base} {...p}><path d="M4 8h3l1.6-2.4A1.5 1.5 0 0 1 9.9 5h4.2a1.5 1.5 0 0 1 1.3.6L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z" /><circle cx="12" cy="13" r="3.6" /></svg>
+);
+export const GalleryIcon = (p) => (
+  <svg {...base} {...p}><rect x="3" y="4" width="18" height="16" rx="2.5" /><circle cx="9" cy="9.5" r="1.6" /><path d="m3.5 17 5-5 4 4 2.5-2.5L21 18" /></svg>
+);
+export const RotateIcon = (p) => (
+  <svg {...base} {...p}><path d="M20 11a8 8 0 1 0-2.3 5.7" /><path d="M20 4v7h-7" /></svg>
+);
+export const CropIcon = (p) => (
+  <svg {...base} {...p}><path d="M6 2v14a2 2 0 0 0 2 2h14" /><path d="M2 6h14a2 2 0 0 1 2 2v14" /></svg>
+);
+export const CloseIcon = (p) => (
+  <svg {...base} {...p}><path d="M6 6l12 12M18 6 6 18" /></svg>
+);
+export const CheckIcon = (p) => (
+  <svg {...base} {...p}><path d="m4.5 12.5 4.5 4.5L19.5 7" /></svg>
+);
+export const MoreIcon = (p) => (
+  <svg {...base} {...p}><circle cx="5" cy="12" r="1.3" /><circle cx="12" cy="12" r="1.3" /><circle cx="19" cy="12" r="1.3" /></svg>
+);
+export const HeartIcon = ({ filled, ...p }) => (
+  <svg {...base} {...p} fill={filled ? "currentColor" : "none"}><path d="M12 20s-7.5-4.6-7.5-10A4.3 4.3 0 0 1 12 7.4 4.3 4.3 0 0 1 19.5 10c0 5.4-7.5 10-7.5 10Z" /></svg>
+);
+export const RetakeIcon = (p) => (
+  <svg {...base} {...p}><path d="M4 12a8 8 0 0 1 13.7-5.6L20 9" /><path d="M20 4v5h-5" /><path d="M20 12a8 8 0 0 1-13.7 5.6L4 15" /><path d="M4 20v-5h5" /></svg>
+);
+export const MenuIcon = (p) => (
+  <svg {...base} {...p}><path d="M4 7h16M4 12h16M4 17h16" /></svg>
+);

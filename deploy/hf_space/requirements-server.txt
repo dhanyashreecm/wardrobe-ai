@@ -18,3 +18,4 @@ cloudinary
 gradio_client
 rembg
 onnxruntime
+pillow-heif

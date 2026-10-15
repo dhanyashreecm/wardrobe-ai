@@ -58,7 +58,7 @@ export default function CameraCapture({ onUse, onCancel, onUnavailable, disabled
   const streamRef = useRef(null);
   const timerRef = useRef(null);
 
-  const [facing, setFacing] = useState("user");
+  const [facing, setFacing] = useState("environment"); // rear camera first (sharper); switch for a selfie
   const [starting, setStarting] = useState(true);
   const [error, setError] = useState("");
   const [captured, setCaptured] = useState(null); // { blob, url, width, height }

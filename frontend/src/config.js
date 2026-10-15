@@ -32,7 +32,19 @@ function savedServer() {
   }
 }
 
-export const DEFAULT_API_URL = process.env.REACT_APP_API_URL || "http://localhost:5001";
+// Opened from the backend's own address (the phone link in Safari, or
+// "Add to Home Screen" on iPhone) the API is that same address. Local
+// development (localhost:3000) and the Android app keep localhost:5001.
+function sameOriginServer() {
+  if (typeof window === "undefined" || !window.location) return "";
+  const { protocol, hostname, origin, port } = window.location;
+  if (!/^https?:$/.test(protocol)) return "";
+  if (port) return ""; // dev server on a LAN address (e.g. :3000) still talks to :5001
+  if (["localhost", "127.0.0.1", "[::1]"].includes(hostname)) return "";
+  return origin;
+}
+
+export const DEFAULT_API_URL = process.env.REACT_APP_API_URL || sameOriginServer() || "http://localhost:5001";
 export const API_URL = savedServer() || DEFAULT_API_URL;
 
 // True inside the installed Android/iOS app (Capacitor), false in a browser.

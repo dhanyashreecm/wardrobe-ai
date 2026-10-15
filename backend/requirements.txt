@@ -52,3 +52,6 @@ gradio_client
 # after that a cut-out takes about 1.5 s on a laptop CPU.
 #   pip install rembg onnxruntime
 # (on some versions:  pip install "rembg[cpu]")
+
+# iPhone HEIC photos (optional; HEIC is refused without it)
+pillow-heif

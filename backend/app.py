@@ -95,7 +95,9 @@ import os
 import uuid
 import traceback
 import io
+import re
 import threading
+import time
 from datetime import timedelta
 import shutil
 from werkzeug.utils import secure_filename
@@ -107,7 +109,43 @@ from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 
-CORS(app)
+# Who may call this API from a browser/app page on ANOTHER address.
+# The phone app (Capacitor) runs on https://localhost (Android) or
+# capacitor://localhost (iOS); development runs on localhost / LAN :3000.
+# The web app served by this backend itself is same-origin and needs no
+# entry. Extra addresses: CORS_ORIGINS="https://a.example,https://b.example".
+# Sign-in uses a bearer token (never cookies), so this is defence in
+# depth rather than the only lock.
+_CORS_ORIGINS = [
+    "capacitor://localhost", "ionic://localhost",
+    re.compile(r"^https?://localhost(:\d+)?$"),
+    re.compile(r"^https?://127\.0\.0\.1(:\d+)?$"),
+    re.compile(r"^http://(192\.168|10|172\.(1[6-9]|2\d|3[01]))\.\d+\.\d+(\.\d+)?:\d+$"),
+] + [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
+CORS(app, origins=_CORS_ORIGINS)
+
+# Refuse giant uploads before reading them into memory. Wardrobe photos
+# are checked again at 15 MB with a friendlier message; this is the
+# hard ceiling for any request (a little room for the form fields).
+app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
+
+
+_TOO_LARGE = {"success": False, "message": "That photo is too large (over 20 MB). Please choose a smaller one."}
+
+
+@app.before_request
+def _refuse_oversized_requests():
+    # Checked up front because some upload routes wrap everything in a
+    # catch-all that would otherwise report this as a server error.
+    length = request.content_length
+    if length is not None and length > app.config["MAX_CONTENT_LENGTH"]:
+        return jsonify(_TOO_LARGE), 413
+    return None
+
+
+@app.errorhandler(413)
+def _too_large(_error):
+    return jsonify(_TOO_LARGE), 413
 
 # Signing key for login tokens, read from this machine's .env (see
 # config.py). It used to be a placeholder string committed in this
@@ -123,7 +161,10 @@ app.config["JWT_SECRET_KEY"] = config.JWT_SECRET_KEY
 # anyone. Accepting the token from ?token= as well lets the image
 # route check ownership like every other route. Headers stay first,
 # so nothing else changes.
-app.config["JWT_TOKEN_LOCATION"] = ["headers", "query_string"]
+# ...but ONLY on that image route (see serve_image's decorator). A token
+# in a URL can end up in proxy logs and browser history, so every other
+# route accepts the Authorization header alone.
+app.config["JWT_TOKEN_LOCATION"] = ["headers"]
 app.config["JWT_QUERY_STRING_NAME"] = "token"
 
 # Login tokens used to expire after flask-jwt-extended's DEFAULT of 15
@@ -389,6 +430,44 @@ def register():
 # LOGIN
 # =========================================================
 
+# ---------------------------------------------------------
+# Slow down password guessing: 8 wrong passwords for one email from
+# one address within 15 minutes pauses logins for that pair. Kept in
+# memory (one backend process), so a restart clears it - enough to
+# stop a script hammering one account, without a new database table.
+# ---------------------------------------------------------
+LOGIN_FAIL_LIMIT = 8
+LOGIN_FAIL_WINDOW = 15 * 60
+_login_failures = {}
+_login_lock = threading.Lock()
+
+
+def _client_ip():
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    return (forwarded.split(",")[0].strip() if forwarded else request.remote_addr) or "?"
+
+
+def _login_key(email):
+    return f"{email}|{_client_ip()}"
+
+
+def _recent_failures(key, now):
+    with _login_lock:
+        times = [t for t in _login_failures.get(key, []) if now - t < LOGIN_FAIL_WINDOW]
+        if times:
+            _login_failures[key] = times
+        else:
+            _login_failures.pop(key, None)
+        return times
+
+
+def _record_failure(key, now):
+    with _login_lock:
+        _login_failures.setdefault(key, []).append(now)
+        if len(_login_failures) > 10000:  # never grow without bound
+            _login_failures.clear()
+
+
 @app.route("/api/login", methods=["POST"])
 def login():
 
@@ -402,6 +481,16 @@ def login():
             "success": False,
             "message": "Enter your email and password"
         }), 400
+
+    now = time.time()
+    key = _login_key(email)
+    recent = _recent_failures(key, now)
+    if len(recent) >= LOGIN_FAIL_LIMIT:
+        wait = int(LOGIN_FAIL_WINDOW - (now - recent[0])) // 60 + 1
+        return jsonify({
+            "success": False,
+            "message": f"Too many wrong passwords. Please wait about {wait} minute{'s' if wait != 1 else ''}, or use Forgot password.",
+        }), 429
 
     result = verify_login(
         email,
@@ -429,10 +518,13 @@ def login():
                 result.get("name"), result.get("email") or email
             )
 
+        with _login_lock:
+            _login_failures.pop(key, None)
         return jsonify(result), 200
 
     else:
 
+        _record_failure(key, now)
         return jsonify(result), 401
 
 
@@ -594,7 +686,16 @@ def wardrobe_capabilities():
     }), 200
 
 
-ALLOWED_IMAGE_TYPES = {"jpeg", "png", "webp", "gif", "bmp", "mpo"}
+ALLOWED_IMAGE_TYPES = {"jpeg", "png", "webp", "gif", "bmp", "mpo", "heif"}
+
+# iPhone photos (HEIC/HEIF). The app converts them to JPEG before upload
+# where the phone can, so this is the fallback for the rest. Optional:
+# without pillow-heif installed HEIC is simply refused as before.
+try:
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+except Exception:  # noqa: BLE001 - not installed is fine
+    pass
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 
 
@@ -619,7 +720,7 @@ def validate_upload_image(file_storage):
             img.verify()
             fmt = (img.format or "").lower()
     except (UnidentifiedImageError, OSError, ValueError):
-        return False, "That file isn't an image we can read (use JPG, PNG or WEBP)."
+        return False, "That file isn't an image we can read (use JPG, PNG, WEBP or HEIC)."
     if fmt not in ALLOWED_IMAGE_TYPES:
         return False, f"{fmt.upper() or 'This'} images aren't supported - please use JPG, PNG or WEBP."
     return True, "ok"
@@ -1155,7 +1256,7 @@ def _add_wardrobe_item():
 @app.route(
     "/api/uploads/<folder_name>/<filename>"
 )
-@jwt_required()
+@jwt_required(locations=["headers", "query_string"])
 def serve_image(
     folder_name,
     filename
@@ -2910,6 +3011,30 @@ def delete_account():
     return jsonify({
         "success": True
     }), 200
+
+
+# =========================================================
+# WEB APP (iPhone / any browser through the phone link)
+#
+# When frontend/build exists, the backend also serves the React app, so
+# one https address gives the whole app: open it in Safari and "Add to
+# Home Screen". Every /api/... route above still wins - Flask always
+# prefers a fixed rule over this catch-all.
+# =========================================================
+WEB_BUILD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend", "build")
+
+
+@app.route("/", defaults={"path": ""})
+@app.route("/<path:path>")
+def serve_web_app(path):
+    if path.startswith("api/") or not os.path.isfile(os.path.join(WEB_BUILD_DIR, "index.html")):
+        return jsonify({"success": False, "message": "Not found"}), 404
+    candidate = os.path.normpath(os.path.join(WEB_BUILD_DIR, path))
+    if path and candidate.startswith(WEB_BUILD_DIR + os.sep) and os.path.isfile(candidate):
+        return send_from_directory(WEB_BUILD_DIR, path)
+    response = send_from_directory(WEB_BUILD_DIR, "index.html")
+    response.headers["Cache-Control"] = "no-cache"
+    return response
 
 
 if __name__ == "__main__":

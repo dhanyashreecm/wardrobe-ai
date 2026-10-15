@@ -236,3 +236,53 @@ test('no gender on the account -> empty selector with a message, never every cat
   expect(select.querySelectorAll('option')).toHaveLength(1);
   expect(screen.getAllByText(/gender information is required/i).length).toBeGreaterThan(0);
 });
+
+test('several gallery photos: shown in a tray, one removed, the rest uploaded one by one', async () => {
+  mockGets({ auto: true });
+  axios.post.mockResolvedValue({ data: { success: true, category: 'Shirt' } });
+  render(<MemoryRouter><Wardrobe /></MemoryRouter>);
+  await screen.findByText('White Shirt');
+  fireEvent.click(screen.getByRole('button', { name: /add new item/i }));
+  const files = ['a', 'b', 'c'].map((n) => new File(['png'], `${n}.png`, { type: 'image/png' }));
+  fireEvent.change(screen.getByTestId('gallery-input'), { target: { files } });
+  expect(await screen.findByText(/of 10 photos selected/i)).toBeInTheDocument();
+  expect(screen.getAllByRole('img', { name: /selected \d/i })).toHaveLength(3);
+  fireEvent.click(screen.getByRole('button', { name: 'Remove photo 2' }));
+  expect(screen.getAllByRole('img', { name: /selected \d/i })).toHaveLength(2);
+  fireEvent.click(screen.getByRole('button', { name: /next · 2 photos/i }));
+  fireEvent.click(await screen.findByRole('button', { name: /upload 2 items/i }));
+  await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(2));
+  expect(axios.post.mock.calls[0][1].get('image').name).toBe('a.png');
+  expect(axios.post.mock.calls[1][1].get('image').name).toBe('c.png');
+  expect(await screen.findByText(/all 2 items added/i)).toBeInTheDocument();
+});
+
+test('a failed photo in a batch can be retried on its own', async () => {
+  mockGets({ auto: true });
+  axios.post
+    .mockResolvedValueOnce({ data: { success: true, category: 'Shirt' } })
+    .mockRejectedValueOnce({ response: { status: 500, data: { message: 'Storage hiccup' } } })
+    .mockResolvedValueOnce({ data: { success: true, category: 'Jeans' } });
+  render(<MemoryRouter><Wardrobe /></MemoryRouter>);
+  await screen.findByText('White Shirt');
+  fireEvent.click(screen.getByRole('button', { name: /add new item/i }));
+  const files = ['a', 'b'].map((n) => new File(['png'], `${n}.png`, { type: 'image/png' }));
+  fireEvent.change(screen.getByTestId('gallery-input'), { target: { files } });
+  fireEvent.click(await screen.findByRole('button', { name: /next · 2 photos/i }));
+  fireEvent.click(await screen.findByRole('button', { name: /upload 2 items/i }));
+  expect(await screen.findByText('Storage hiccup')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: /retry 1/i }));
+  await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(3));
+  expect(axios.post.mock.calls[2][1].get('image').name).toBe('b.png');
+  expect(await screen.findByText(/all 2 items added/i)).toBeInTheDocument();
+});
+
+test('a non-image in the gallery pick is refused with a message', async () => {
+  mockGets({ auto: true });
+  render(<MemoryRouter><Wardrobe /></MemoryRouter>);
+  await screen.findByText('White Shirt');
+  fireEvent.click(screen.getByRole('button', { name: /add new item/i }));
+  fireEvent.change(screen.getByTestId('gallery-input'), { target: { files: [new File(['x'], 'notes.pdf', { type: 'application/pdf' })] } });
+  expect(await screen.findByRole('alert')).toHaveTextContent(/isn't a photo/);
+  expect(axios.post).not.toHaveBeenCalled();
+});

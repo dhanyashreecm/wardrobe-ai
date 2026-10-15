@@ -1,10 +1,18 @@
-import "./styles/mobile.css";
+// Fonts ship inside the app (no Google Fonts request, works offline).
+import "@fontsource-variable/inter";
+import "@fontsource/playfair-display/latin-500.css";
+import "@fontsource/playfair-display/latin-600.css";
+import "@fontsource/playfair-display/latin-500-italic.css";
+import "@fontsource/caveat/latin-500.css";
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css';
 import './App.css';
 import './styles/aw.css';
+import './styles/mobile.css';
+import './styles/phone.css';
 import App from './App';
+import { setupNativeShell } from './lib/native';
 import reportWebVitals from './reportWebVitals';
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
@@ -18,6 +26,7 @@ root.render(
 // to log results (for example: reportWebVitals(console.log))
 // or send to an analytics endpoint. Learn more: https://bit.ly/CRA-vitals
 reportWebVitals();
+setupNativeShell();
 
 // Makes the app installable ("Add to Home Screen" / "Install app").
 // Only in the production build - in `npm start` dev mode a service

@@ -5,6 +5,9 @@ import axios from "axios";
 import Layout from "../components/Layout";
 import PageHeader from "../components/PageHeader";
 import CameraCapture from "../components/CameraCapture";
+import PhotoEditor from "../components/PhotoEditor";
+import { CameraIcon, GalleryIcon, RetakeIcon } from "../components/Icons";
+import { isNative, nativeTakePhoto, nativePickPhotos, preparePhoto, checkPersonPhoto } from "../lib/photos";
 import { API_URL, assetUrl } from "../config";
 import "../styles/aw-v2.css";
 import "../styles/tryon.css";
@@ -98,6 +101,10 @@ function VirtualTryOn() {
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraNote, setCameraNote] = useState("");
   const [localPreview, setLocalPreview] = useState("");
+  // A picked/taken photo waiting for review (crop / rotate / retake)
+  // before it is uploaded: { file, url, notes, source }.
+  const [pending, setPending] = useState(null);
+  const [pickError, setPickError] = useState("");
   const [uploading, setUploading] = useState(false);
   const [photoProblems, setPhotoProblems] = useState([]);
   // Notes about an ACCEPTED photo - dim, slightly soft. Separate from
@@ -269,13 +276,75 @@ function VirtualTryOn() {
 
   // ---------------- photo ----------------
 
-  const choosePhoto = () => fileInput.current && fileInput.current.click();
+  const choosePhoto = () => {
+    if (isNative()) return nativeGallery();
+    return fileInput.current && fileInput.current.click();
+  };
 
   const uploadPhoto = async (event) => {
     const file = event.target.files && event.target.files[0];
     if (fileInput.current) fileInput.current.value = "";
     if (!file) return;
-    await sendPersonPhoto(file);
+    await reviewPhoto(file, "gallery");
+  };
+
+  // Every chosen or native-camera photo is shown for review first:
+  // crop, rotate, retake - nothing is uploaded until "Use this photo".
+  const reviewPhoto = async (file, source) => {
+    setPhotoProblems([]);
+    setPickError("");
+    setError("");
+    if (!file.type.startsWith("image/") && !/\.(heic|heif)$/i.test(file.name || "")) {
+      setPhotoProblems(["Please choose a photo (JPEG, PNG or WebP)."]);
+      return;
+    }
+    const ready = await preparePhoto(file);
+    if (!ready.ok) {
+      setPhotoProblems([ready.error]);
+      return;
+    }
+    const notes = [...(ready.warnings || []), ...(await checkPersonPhoto(ready.file))];
+    if (pending) URL.revokeObjectURL(pending.url);
+    setPending({ file: ready.file, url: URL.createObjectURL(ready.file), notes, source });
+  };
+
+  const discardPending = () => {
+    if (pending) URL.revokeObjectURL(pending.url);
+    setPending(null);
+  };
+
+  const usePending = async (file) => {
+    const chosen = file || pending.file;
+    discardPending();
+    await sendPersonPhoto(chosen);
+  };
+
+  const retakePending = () => {
+    const source = pending && pending.source;
+    discardPending();
+    if (source === "native-camera") return nativeCamera();
+    if (source === "gallery") return choosePhoto();
+    return openCamera();
+  };
+
+  const nativeCamera = async () => {
+    setPickError("");
+    try {
+      const file = await nativeTakePhoto();
+      if (file) await reviewPhoto(file, "native-camera");
+    } catch (err) {
+      setPickError(err.message);
+    }
+  };
+
+  const nativeGallery = async () => {
+    setPickError("");
+    try {
+      const [file] = await nativePickPhotos(1);
+      if (file) await reviewPhoto(file, "gallery");
+    } catch (err) {
+      setPickError(err.message);
+    }
   };
 
   // The one path a person photo takes to the server - a chosen file and
@@ -662,11 +731,37 @@ function VirtualTryOn() {
               onUnavailable={(message) => setCameraNote(message)}
               disabled={uploading || busy}
             />
+          ) : pending ? (
+            <div className="tryon-review" data-testid="photo-review">
+              <p className="tryon-review-title">Check your photo</p>
+              <PhotoEditor
+                key={pending.url}
+                src={pending.url}
+                file={pending.file}
+                shapes={[["whole", "Original"], ["portrait", "3:4 portrait"]]}
+                doneLabel="✓ Use this photo"
+                cancelLabel="Cancel"
+                onCancel={discardPending}
+                onDone={usePending}
+                guide={<div className="tryon-pose-guide" aria-hidden="true" />}
+              />
+              <button type="button" className="aw-btn aw-btn-ghost tryon-retake" onClick={retakePending}>
+                <RetakeIcon width={18} height={18} /> {pending.source === "gallery" ? "Choose another" : "Retake"}
+              </button>
+              {pending.notes.length > 0 ? (
+                <div className="aw-note" role="status" data-testid="photo-checks">
+                  <strong>Before you use it:</strong>
+                  <ul>{pending.notes.map((n) => <li key={n}>{n}</li>)}</ul>
+                </div>
+              ) : (
+                <p className="aw-hint">Looks good? Make sure your face and the clothes you want to replace are clearly visible.</p>
+              )}
+            </div>
           ) : photoUrl || localPreview ? (
             <div className="tryon-photo">
               <img src={localPreview || assetUrl(photoUrl)} alt="You, for the try-on" data-testid="photo-preview" />
               <div className="aw-actions-row">
-                <button type="button" className="aw-btn aw-btn-soft aw-btn-sm" onClick={openCamera} disabled={uploading || busy}>
+                <button type="button" className="aw-btn aw-btn-soft aw-btn-sm" onClick={isNative() ? nativeCamera : openCamera} disabled={uploading || busy}>
                   📷 Take new photo
                 </button>
                 <button type="button" className="aw-btn aw-btn-soft aw-btn-sm" onClick={choosePhoto} disabled={uploading || busy}>
@@ -680,26 +775,35 @@ function VirtualTryOn() {
             </div>
           ) : (
             <div className="tryon-photo-choice">
-              <button type="button" className="tryon-drop" onClick={openCamera} disabled={uploading}>
-                <span className="tryon-drop-icon">📷</span>
+              <button type="button" className="tryon-drop" onClick={isNative() ? nativeCamera : openCamera} disabled={uploading}>
+                <span className="tryon-drop-icon"><CameraIcon width={30} height={30} /></span>
                 <span>Take Photo</span>
-                <small>Use your device camera</small>
+                <small>{isNative() ? "Rear camera - ask a friend to take it" : "Use your device camera"}</small>
               </button>
+              {isNative() && (
+                <button type="button" className="tryon-drop" onClick={openCamera} disabled={uploading}>
+                  <span className="tryon-drop-icon">⏱</span>
+                  <span>Self-timer</span>
+                  <small>Prop your phone up, 5-second timer</small>
+                </button>
+              )}
               <span className="tryon-or">OR</span>
               <button type="button" className="tryon-drop" onClick={choosePhoto} disabled={uploading}>
-                <span className="tryon-drop-icon">⬆</span>
+                <span className="tryon-drop-icon"><GalleryIcon width={30} height={30} /></span>
                 <span>Upload Photo</span>
-                <small>JPEG, PNG or WebP, up to {capability?.max_upload_mb || 8} MB</small>
+                <small>From your gallery · JPEG, PNG, WebP or HEIC</small>
               </button>
             </div>
           )}
+
+          {pickError && <div className="aw-alert" role="alert">{pickError}</div>}
 
           {cameraNote && !cameraOpen && (
             <div className="aw-note" role="status" data-testid="camera-note">{cameraNote}</div>
           )}
 
-          <div className="tryon-best">
-            <p><strong>📸 For the best try-on</strong></p>
+          <details className="tryon-best">
+            <summary><strong>📸 For the best try-on</strong> <span className="aw-hint">tap for tips</span></summary>
             <ul>
               <li>Stand facing the camera.</li>
               <li>Keep your full body visible from head to feet whenever possible.</li>
@@ -715,12 +819,12 @@ function VirtualTryOn() {
               preserve your face and overall appearance as closely as the VTO model allows
               while changing the clothing.
             </p>
-          </div>
+          </details>
 
           <input
             ref={fileInput}
             type="file"
-            accept="image/jpeg,image/png,image/webp"
+            accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
             onChange={uploadPhoto}
             style={{ display: "none" }}
             data-testid="photo-input"

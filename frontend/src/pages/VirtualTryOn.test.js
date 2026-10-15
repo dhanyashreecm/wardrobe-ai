@@ -108,6 +108,12 @@ test('upload control sends the photo and shows a preview', async () => {
   const input = screen.getByTestId('photo-input');
   const file = new File(['png'], 'me.png', { type: 'image/png' });
   await act(async () => { fireEvent.change(input, { target: { files: [file] } }); });
+  // reviewed first: nothing is sent until the user confirms
+  await screen.findByTestId('photo-review');
+  expect(axios.post).not.toHaveBeenCalled();
+  expect(screen.getByRole('button', { name: /rotate/i })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /choose another/i })).toBeInTheDocument();
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: /use this photo/i })); });
   const preview = await screen.findByTestId('photo-preview');
   await waitFor(() => expect(preview).toHaveAttribute('src', 'https://res.cloudinary.com/x/me.jpg'));
   const [url, body] = axios.post.mock.calls[0];
@@ -135,6 +141,7 @@ test('photo problems from the server are shown', async () => {
   await act(async () => {
     fireEvent.change(screen.getByTestId('photo-input'), { target: { files: [new File(['p'], 'a.png', { type: 'image/png' })] } });
   });
+  await act(async () => { fireEvent.click(await screen.findByRole('button', { name: /use this photo/i })); });
   expect(await screen.findByText('The photo is too small.')).toBeInTheDocument();
 });
 
@@ -605,6 +612,7 @@ test('TEST G: camera permission denied falls back to upload', async () => {
   axios.post.mockResolvedValue({ data: { success: true, photo_url: 'https://res.cloudinary.com/x/up.jpg' } });
   const file = new File(['png'], 'me.png', { type: 'image/png' });
   await act(async () => { fireEvent.change(screen.getByTestId('photo-input'), { target: { files: [file] } }); });
+  await act(async () => { fireEvent.click(await screen.findByRole('button', { name: /use this photo/i })); });
   expect(axios.post.mock.calls[0][1].get('image')).toBe(file);
 });
 
@@ -639,4 +647,16 @@ test('TEST D/E: Recent Try-Ons show each job\'s own result, and Compare shows th
   expect(screen.getByRole('img', { name: /your original photo/i })).toHaveAttribute('src', 'https://res.cloudinary.com/x/personA.jpg');
   // the person photo shown in step 1 is still the current one (B)
   expect(screen.getByTestId('photo-preview')).toHaveAttribute('src', 'https://res.cloudinary.com/x/personB.jpg');
+});
+
+test('a reviewed photo can be discarded without uploading anything', async () => {
+  mockApi();
+  renderPage();
+  await screen.findByText('Upload Photo');
+  const file = new File(['png'], 'me.png', { type: 'image/png' });
+  await act(async () => { fireEvent.change(screen.getByTestId('photo-input'), { target: { files: [file] } }); });
+  await screen.findByTestId('photo-review');
+  fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+  expect(await screen.findByText('Upload Photo')).toBeInTheDocument();
+  expect(axios.post).not.toHaveBeenCalled();
 });

@@ -103,3 +103,7 @@ mobile/android/capacitor-cordova-android-plugins/build/
 push_mobile.command
 tools/
 start_phone_access.command
+
+# App signing key - never commit
+mobile/keystore/
+*.jks
